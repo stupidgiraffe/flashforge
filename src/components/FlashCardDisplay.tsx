@@ -32,16 +32,18 @@ export function FlashCardDisplay({
   )
 
   const fontSize = calculateFontSize(settings.fontSize, settings.cardsPerPage, text?.length || 0)
-  const secondaryFontSize = fontSize * 0.75
+  const secondaryFontSize = fontSize * 0.7
 
   const themeClasses = getThemeClasses(settings.theme)
   const borderClass = settings.showBorder ? 'border-2' : 'border-0'
-  const roundedClass = settings.showRoundedCorners ? 'rounded-lg' : 'rounded-none'
+  const roundedClass = settings.showRoundedCorners ? 'rounded-xl' : 'rounded-none'
+
+  const imageHeight = cardHeight * 0.5
 
   return (
     <div
       className={cn(
-        'relative overflow-hidden flex flex-col',
+        'relative overflow-hidden flex flex-col shadow-sm',
         themeClasses,
         borderClass,
         roundedClass
@@ -56,7 +58,7 @@ export function FlashCardDisplay({
     >
       {settings.showNumbering && cardNumber !== undefined && (
         <div
-          className="absolute top-2 left-2 text-xs font-medium opacity-60"
+          className="absolute top-3 left-3 text-xs font-semibold opacity-40 z-10"
           style={{ color: settings.mainColor }}
         >
           #{cardNumber}
@@ -65,22 +67,22 @@ export function FlashCardDisplay({
 
       {showSetTitle && settings.showSetTitle && (
         <div
-          className="absolute top-2 right-2 text-xs font-medium opacity-60 max-w-[60%] truncate"
+          className="absolute top-3 right-3 text-xs font-semibold opacity-40 max-w-[60%] truncate z-10"
           style={{ color: settings.mainColor }}
         >
           {showSetTitle}
         </div>
       )}
 
-      <div className="flex-1 flex flex-col items-center justify-center p-4">
+      <div className="flex-1 flex flex-col items-center justify-center p-6">
         {showImage && card.imageUrl && (
           <div
-            className={cn(
-              'mb-3',
-              settings.imageFit === 'cover' && 'w-full h-32 object-cover',
-              settings.imageFit === 'contain' && 'max-w-full max-h-32 object-contain',
-              settings.imageFit === 'center' && 'w-full h-32 object-center object-cover'
-            )}
+            className="mb-4 rounded-lg overflow-hidden"
+            style={{
+              width: '100%',
+              maxHeight: `${imageHeight}px`,
+              minHeight: `${Math.min(imageHeight, 120)}px`,
+            }}
           >
             <img
               src={card.imageUrl}
@@ -88,6 +90,7 @@ export function FlashCardDisplay({
               className="w-full h-full"
               style={{
                 objectFit: settings.imageFit === 'contain' ? 'contain' : 'cover',
+                objectPosition: 'center',
               }}
             />
           </div>
@@ -97,12 +100,15 @@ export function FlashCardDisplay({
           <div
             className={cn(
               'font-bold break-words hyphens-auto w-full',
-              `text-${settings.textAlignment}`
+              settings.textAlignment === 'left' && 'text-left',
+              settings.textAlignment === 'center' && 'text-center',
+              settings.textAlignment === 'right' && 'text-right'
             )}
             style={{
               fontSize: `${fontSize}px`,
-              lineHeight: 1.2,
+              lineHeight: 1.3,
               color: settings.mainColor,
+              fontFamily: settings.fontFamily,
             }}
           >
             {text}
@@ -112,13 +118,16 @@ export function FlashCardDisplay({
         {secondary && (
           <div
             className={cn(
-              'mt-2 break-words w-full',
-              `text-${settings.textAlignment}`
+              'mt-3 break-words w-full',
+              settings.textAlignment === 'left' && 'text-left',
+              settings.textAlignment === 'center' && 'text-center',
+              settings.textAlignment === 'right' && 'text-right'
             )}
             style={{
               fontSize: `${secondaryFontSize}px`,
-              lineHeight: 1.3,
+              lineHeight: 1.4,
               color: settings.accentColor,
+              fontFamily: settings.fontFamily,
             }}
           >
             {secondary}
@@ -128,7 +137,7 @@ export function FlashCardDisplay({
 
       {settings.footerText && (
         <div
-          className="text-xs text-center py-1 border-t opacity-50"
+          className="text-xs text-center py-2 border-t opacity-40"
           style={{ borderColor: settings.mainColor, color: settings.mainColor }}
         >
           {settings.footerText}
