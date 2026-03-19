@@ -14,6 +14,7 @@ import { loadSets, saveSet, deleteSet, generateUniqueId, compressImage } from '@
 import { FlashCardDisplay } from '@/components/FlashCardDisplay'
 import { TestDisplay, AnswerKey } from '@/components/TestDisplay'
 import { TestConfigDialog } from '@/components/TestConfigDialog'
+import { DesignPanel } from '@/components/DesignPanel'
 import { generateTestQuestions } from '@/lib/test-utils'
 import { calculatePrintLayout, paginateCards } from '@/lib/print-utils'
 
@@ -396,8 +397,9 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
       />
 
       <Tabs defaultValue="editor" className="no-print">
-        <TabsList className="grid w-full max-w-md grid-cols-3">
+        <TabsList className="grid w-full max-w-2xl grid-cols-4">
           <TabsTrigger value="editor">Editor</TabsTrigger>
+          <TabsTrigger value="design">Design</TabsTrigger>
           <TabsTrigger value="preview">Preview</TabsTrigger>
           {generatedTest && <TabsTrigger value="test">Test</TabsTrigger>}
         </TabsList>
@@ -584,6 +586,18 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
           )}
         </TabsContent>
 
+        <TabsContent value="design" className="space-y-6 mt-6">
+          <DesignPanel
+            settings={localSet.printSettings}
+            onUpdate={(updates) => {
+              setLocalSet({
+                ...localSet,
+                printSettings: { ...localSet.printSettings, ...updates },
+              })
+            }}
+          />
+        </TabsContent>
+
         <TabsContent value="preview" className="mt-6">
           <Card className="shadow-lg">
             <CardHeader>
@@ -592,29 +606,32 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                 {pages.length} page{pages.length !== 1 ? 's' : ''} · {localSet.cards.length} card{localSet.cards.length !== 1 ? 's' : ''}
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-12">
+            <CardContent className="overflow-x-auto">
+              <div className="space-y-12 min-w-min">
                 {pages.map((pageCards, pageIndex) => (
-                  <div key={pageIndex} className="border-2 rounded-xl p-8 bg-white shadow-md">
-                    <p className="text-base font-semibold mb-6 text-muted-foreground">Page {pageIndex + 1}</p>
+                  <div key={pageIndex} className="border-2 rounded-xl p-4 md:p-8 bg-white shadow-md min-w-[320px]">
+                    <p className="text-sm md:text-base font-semibold mb-4 md:mb-6 text-muted-foreground">Page {pageIndex + 1}</p>
                     <div
-                      className="grid gap-4"
+                      className="grid gap-2 md:gap-4 w-full"
                       style={{
-                        gridTemplateColumns: `repeat(${layout.cols}, 1fr)`,
-                        gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
+                        gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
+                        aspectRatio: `${layout.cols} / ${layout.rows}`,
                       }}
                     >
-                      {pageCards.map((card, cardIndex) => (
-                        <FlashCardDisplay
-                          key={card.id}
-                          card={card}
-                          settings={localSet.printSettings}
-                          cardWidth={layout.cardWidth / 2}
-                          cardHeight={layout.cardHeight / 2}
-                          cardNumber={pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1}
-                          showSetTitle={localSet.title}
-                        />
-                      ))}
+                      {pageCards.map((card, cardIndex) => {
+                        const scaleFactor = typeof window !== 'undefined' && window.innerWidth < 768 ? 0.3 : 0.5
+                        return (
+                          <FlashCardDisplay
+                            key={card.id}
+                            card={card}
+                            settings={localSet.printSettings}
+                            cardWidth={layout.cardWidth * scaleFactor}
+                            cardHeight={layout.cardHeight * scaleFactor}
+                            cardNumber={pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1}
+                            showSetTitle={localSet.title}
+                          />
+                        )
+                      })}
                     </div>
                   </div>
                 ))}
