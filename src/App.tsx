@@ -295,7 +295,7 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
     })
   }
 
-  async function handleImageUpload(cardId: string, file: File) {
+  async function handleImageUpload(cardId: string, file: File, side: 'front' | 'back' | 'both') {
     if (!file.type.startsWith('image/')) {
       toast.error('Please upload an image file')
       return
@@ -311,7 +311,13 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
       try {
         const dataUrl = e.target?.result as string
         const compressed = await compressImage(dataUrl)
-        updateCard(cardId, { imageUrl: compressed })
+        if (side === 'front') {
+          updateCard(cardId, { frontImageUrl: compressed })
+        } else if (side === 'back') {
+          updateCard(cardId, { backImageUrl: compressed })
+        } else {
+          updateCard(cardId, { imageUrl: compressed, imagePosition: 'both' })
+        }
         toast.success('Image uploaded!')
       } catch (error) {
         console.error('Image upload error:', error)
@@ -321,8 +327,14 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
     reader.readAsDataURL(file)
   }
 
-  function removeImage(cardId: string) {
-    updateCard(cardId, { imageUrl: undefined })
+  function removeImage(cardId: string, side: 'front' | 'back' | 'both') {
+    if (side === 'front') {
+      updateCard(cardId, { frontImageUrl: undefined })
+    } else if (side === 'back') {
+      updateCard(cardId, { backImageUrl: undefined })
+    } else {
+      updateCard(cardId, { imageUrl: undefined, imagePosition: 'front' })
+    }
     toast.success('Image removed')
   }
 
@@ -443,93 +455,128 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                     </div>
                   </div>
 
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-base font-semibold">Card Image</Label>
-                      {card.imageUrl && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => removeImage(card.id)}
-                        >
-                          <Trash className="mr-2" size={16} weight="bold" />
-                          Remove Image
-                        </Button>
-                      )}
-                    </div>
-
-                    {card.imageUrl ? (
-                      <div className="relative group rounded-lg overflow-hidden border-2 border-border">
-                        <img 
-                          src={card.imageUrl} 
-                          alt="Card" 
-                          className="w-full h-64 object-cover"
-                        />
-                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => fileInputRefs.current[card.id]?.click()}
-                          >
-                            <ImageIcon className="mr-2" weight="bold" />
-                            Change Image
-                          </Button>
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => removeImage(card.id)}
-                          >
-                            <Trash className="mr-2" weight="bold" />
-                            Remove
-                          </Button>
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-base font-semibold">Front Image</Label>
+                          {card.frontImageUrl && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removeImage(card.id, 'front')}
+                            >
+                              <Trash className="mr-1" size={14} weight="bold" />
+                              Remove
+                            </Button>
+                          )}
                         </div>
-                      </div>
-                    ) : (
-                      <div
-                        onClick={() => fileInputRefs.current[card.id]?.click()}
-                        className="border-2 border-dashed border-border rounded-lg p-12 text-center cursor-pointer hover:border-primary hover:bg-primary/5 transition-all"
-                      >
-                        <ImageIcon className="w-12 h-12 mx-auto mb-4 text-muted-foreground" weight="duotone" />
-                        <p className="text-base font-medium text-foreground mb-1">Click to upload image</p>
-                        <p className="text-sm text-muted-foreground">PNG, JPG up to 5MB</p>
-                      </div>
-                    )}
 
-                    <input
-                      ref={(el) => {
-                        fileInputRefs.current[card.id] = el
-                      }}
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0]
-                        if (file) {
-                          handleImageUpload(card.id, file)
-                        }
-                      }}
-                    />
+                        {card.frontImageUrl ? (
+                          <div className="relative group rounded-lg overflow-hidden border-2 border-border">
+                            <img 
+                              src={card.frontImageUrl} 
+                              alt="Front" 
+                              className="w-full h-48 object-cover"
+                            />
+                            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => fileInputRefs.current[`${card.id}-front`]?.click()}
+                              >
+                                <ImageIcon className="mr-2" weight="bold" />
+                                Change
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div
+                            onClick={() => fileInputRefs.current[`${card.id}-front`]?.click()}
+                            className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-primary hover:bg-primary/5 transition-all"
+                          >
+                            <ImageIcon className="w-10 h-10 mx-auto mb-3 text-muted-foreground" weight="duotone" />
+                            <p className="text-sm font-medium text-foreground mb-1">Add front image</p>
+                            <p className="text-xs text-muted-foreground">PNG, JPG up to 5MB</p>
+                          </div>
+                        )}
 
-                    {card.imageUrl && (
-                      <div className="space-y-2">
-                        <Label className="text-base font-semibold">Image Position</Label>
-                        <Select
-                          value={card.imagePosition || 'front'}
-                          onValueChange={(value: 'front' | 'back' | 'both') =>
-                            updateCard(card.id, { imagePosition: value })
-                          }
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="front">Front Only</SelectItem>
-                            <SelectItem value="back">Back Only</SelectItem>
-                            <SelectItem value="both">Both Sides</SelectItem>
-                          </SelectContent>
-                        </Select>
+                        <input
+                          ref={(el) => {
+                            fileInputRefs.current[`${card.id}-front`] = el
+                          }}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0]
+                            if (file) {
+                              handleImageUpload(card.id, file, 'front')
+                            }
+                          }}
+                        />
                       </div>
-                    )}
+
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-base font-semibold">Back Image</Label>
+                          {card.backImageUrl && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removeImage(card.id, 'back')}
+                            >
+                              <Trash className="mr-1" size={14} weight="bold" />
+                              Remove
+                            </Button>
+                          )}
+                        </div>
+
+                        {card.backImageUrl ? (
+                          <div className="relative group rounded-lg overflow-hidden border-2 border-border">
+                            <img 
+                              src={card.backImageUrl} 
+                              alt="Back" 
+                              className="w-full h-48 object-cover"
+                            />
+                            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => fileInputRefs.current[`${card.id}-back`]?.click()}
+                              >
+                                <ImageIcon className="mr-2" weight="bold" />
+                                Change
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div
+                            onClick={() => fileInputRefs.current[`${card.id}-back`]?.click()}
+                            className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-primary hover:bg-primary/5 transition-all"
+                          >
+                            <ImageIcon className="w-10 h-10 mx-auto mb-3 text-muted-foreground" weight="duotone" />
+                            <p className="text-sm font-medium text-foreground mb-1">Add back image</p>
+                            <p className="text-xs text-muted-foreground">PNG, JPG up to 5MB</p>
+                          </div>
+                        )}
+
+                        <input
+                          ref={(el) => {
+                            fileInputRefs.current[`${card.id}-back`] = el
+                          }}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0]
+                            if (file) {
+                              handleImageUpload(card.id, file, 'back')
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -611,7 +658,7 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
         )}
       </Tabs>
 
-      <div className="print-only">
+      <div className="print-only" style={{ position: 'relative' }}>
         {generatedTest ? (
           <>
             <div className="page-break-after">
@@ -636,12 +683,15 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
             {pages.map((pageCards, pageIndex) => (
               <div
                 key={pageIndex}
-                className="page-break-after"
+                className="avoid-break"
                 style={{
-                  width: `${layout.pageWidth}px`,
-                  height: `${layout.pageHeight}px`,
+                  width: '100vw',
+                  height: '100vh',
+                  position: 'relative',
                   padding: `${layout.marginTop}px ${layout.marginRight}px ${layout.marginBottom}px ${layout.marginLeft}px`,
-                  pageBreakAfter: 'always',
+                  pageBreakAfter: pageIndex < pages.length - 1 ? 'always' : 'auto',
+                  breakAfter: pageIndex < pages.length - 1 ? 'page' : 'auto',
+                  boxSizing: 'border-box',
                 }}
               >
                 <div

@@ -120,4 +120,14 @@
     box-shadow: none !important;
     text-shadow: none !important;
   }
+  
+  body > div:not(.print-only) {
+    display: none !important;
+  }
+  
+  .print-only {
+    display: block !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
 }

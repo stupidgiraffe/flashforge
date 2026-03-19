@@ -25,11 +25,12 @@ export function FlashCardDisplay({
   const text = isFront ? card.frontText : card.backText
   const secondary = isFront ? card.frontSecondary : card.backSecondary
   
-  const showImage = card.imageUrl && (
-    card.imagePosition === 'both' ||
-    (isFront && card.imagePosition === 'front') ||
-    (!isFront && card.imagePosition === 'back')
-  )
+  let imageUrl: string | undefined
+  if (isFront) {
+    imageUrl = card.frontImageUrl || (card.imagePosition === 'front' || card.imagePosition === 'both' ? card.imageUrl : undefined)
+  } else {
+    imageUrl = card.backImageUrl || (card.imagePosition === 'back' || card.imagePosition === 'both' ? card.imageUrl : undefined)
+  }
 
   const fontSize = calculateFontSize(settings.fontSize, settings.cardsPerPage, text?.length || 0)
   const secondaryFontSize = fontSize * 0.7
@@ -75,7 +76,7 @@ export function FlashCardDisplay({
       )}
 
       <div className="flex-1 flex flex-col items-center justify-center p-6">
-        {showImage && card.imageUrl && (
+        {imageUrl && (
           <div
             className="mb-4 rounded-lg overflow-hidden"
             style={{
@@ -85,7 +86,7 @@ export function FlashCardDisplay({
             }}
           >
             <img
-              src={card.imageUrl}
+              src={imageUrl}
               alt={text || ''}
               className="w-full h-full"
               style={{

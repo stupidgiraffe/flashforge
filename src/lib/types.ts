@@ -4,6 +4,8 @@ export interface FlashCard {
   backText: string
   frontSecondary?: string
   backSecondary?: string
+  frontImageUrl?: string
+  backImageUrl?: string
   imageUrl?: string
   imagePosition?: 'front' | 'back' | 'both'
   tags?: string[]
