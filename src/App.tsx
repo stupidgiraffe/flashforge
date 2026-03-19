@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Printer, DownloadSimple } from '@phosphor-icons/react'
+import { Plus, Printer, DownloadSimple, Exam } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
@@ -11,6 +11,9 @@ import type { FlashCardSet, FlashCard } from '@/lib/types'
 import { DEFAULT_PRINT_SETTINGS, DEFAULT_TEST_SETTINGS } from '@/lib/types'
 import { loadSets, saveSet, deleteSet, generateUniqueId } from '@/lib/storage'
 import { FlashCardDisplay } from '@/components/FlashCardDisplay'
+import { TestDisplay, AnswerKey } from '@/components/TestDisplay'
+import { TestConfigDialog } from '@/components/TestConfigDialog'
+import { generateTestQuestions } from '@/lib/test-utils'
 import { calculatePrintLayout, paginateCards } from '@/lib/print-utils'
 
 function App() {
@@ -249,6 +252,8 @@ interface SetEditorProps {
 
 function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
   const [localSet, setLocalSet] = useState(set)
+  const [showTestDialog, setShowTestDialog] = useState(false)
+  const [generatedTest, setGeneratedTest] = useState<ReturnType<typeof generateTestQuestions> | null>(null)
 
   useEffect(() => {
     onUpdate(localSet)
@@ -281,6 +286,23 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
     })
   }
 
+  function handleGenerateTest() {
+    if (localSet.cards.length === 0) {
+      toast.error('Add some cards first!')
+      return
+    }
+    const questions = generateTestQuestions(localSet.cards, localSet.testSettings)
+    setGeneratedTest(questions)
+    toast.success('Test generated!')
+  }
+
+  function handleTestSettingsChange(newSettings: typeof localSet.testSettings) {
+    setLocalSet({
+      ...localSet,
+      testSettings: newSettings,
+    })
+  }
+
   const layout = calculatePrintLayout(
     localSet.printSettings.cardsPerPage,
     localSet.printSettings.paperSize,
@@ -303,10 +325,27 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
         </Button>
       </div>
 
+      <div className="flex items-center gap-2 mb-4 no-print">
+        <Button variant="outline" onClick={() => setShowTestDialog(true)} disabled={localSet.cards.length === 0}>
+          <Exam className="mr-2" />
+          Generate Test
+        </Button>
+      </div>
+
+      <TestConfigDialog
+        open={showTestDialog}
+        onOpenChange={setShowTestDialog}
+        settings={localSet.testSettings}
+        onSettingsChange={handleTestSettingsChange}
+        onGenerate={handleGenerateTest}
+        maxQuestions={localSet.cards.length}
+      />
+
       <Tabs defaultValue="editor" className="no-print">
         <TabsList>
           <TabsTrigger value="editor">Editor</TabsTrigger>
           <TabsTrigger value="preview">Preview</TabsTrigger>
+          {generatedTest && <TabsTrigger value="test">Test</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="editor" className="space-y-4">
@@ -396,44 +435,101 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
             </CardContent>
           </Card>
         </TabsContent>
+
+        {generatedTest && (
+          <TabsContent value="test">
+            <Card>
+              <CardHeader>
+                <CardTitle>Test Preview</CardTitle>
+                <CardDescription>
+                  {generatedTest.length} question{generatedTest.length !== 1 ? 's' : ''}
+                  {localSet.testSettings.includeAnswerKey && ' · Includes answer key'}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-8">
+                  <div className="border rounded-lg overflow-hidden">
+                    <TestDisplay
+                      questions={generatedTest}
+                      settings={localSet.testSettings}
+                      showAnswers={false}
+                    />
+                  </div>
+                  
+                  {localSet.testSettings.includeAnswerKey && (
+                    <div className="border rounded-lg overflow-hidden">
+                      <AnswerKey
+                        questions={generatedTest}
+                        settings={localSet.testSettings}
+                      />
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
       </Tabs>
 
       <div className="print-only">
-        {pages.map((pageCards, pageIndex) => (
-          <div
-            key={pageIndex}
-            className="page-break-after"
-            style={{
-              width: `${layout.pageWidth}px`,
-              height: `${layout.pageHeight}px`,
-              padding: `${layout.marginTop}px ${layout.marginRight}px ${layout.marginBottom}px ${layout.marginLeft}px`,
-              pageBreakAfter: 'always',
-            }}
-          >
-            <div
-              className="grid"
-              style={{
-                gridTemplateColumns: `repeat(${layout.cols}, 1fr)`,
-                gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
-                gap: `${layout.gapY}px ${layout.gapX}px`,
-                width: '100%',
-                height: '100%',
-              }}
-            >
-              {pageCards.map((card, cardIndex) => (
-                <FlashCardDisplay
-                  key={card.id}
-                  card={card}
-                  settings={localSet.printSettings}
-                  cardWidth={layout.cardWidth}
-                  cardHeight={layout.cardHeight}
-                  cardNumber={pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1}
-                  showSetTitle={localSet.title}
-                />
-              ))}
+        {generatedTest ? (
+          <>
+            <div className="page-break-after">
+              <TestDisplay
+                questions={generatedTest}
+                settings={localSet.testSettings}
+                showAnswers={false}
+              />
             </div>
-          </div>
-        ))}
+            
+            {localSet.testSettings.includeAnswerKey && (
+              <div>
+                <AnswerKey
+                  questions={generatedTest}
+                  settings={localSet.testSettings}
+                />
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {pages.map((pageCards, pageIndex) => (
+              <div
+                key={pageIndex}
+                className="page-break-after"
+                style={{
+                  width: `${layout.pageWidth}px`,
+                  height: `${layout.pageHeight}px`,
+                  padding: `${layout.marginTop}px ${layout.marginRight}px ${layout.marginBottom}px ${layout.marginLeft}px`,
+                  pageBreakAfter: 'always',
+                }}
+              >
+                <div
+                  className="grid"
+                  style={{
+                    gridTemplateColumns: `repeat(${layout.cols}, 1fr)`,
+                    gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
+                    gap: `${layout.gapY}px ${layout.gapX}px`,
+                    width: '100%',
+                    height: '100%',
+                  }}
+                >
+                  {pageCards.map((card, cardIndex) => (
+                    <FlashCardDisplay
+                      key={card.id}
+                      card={card}
+                      settings={localSet.printSettings}
+                      cardWidth={layout.cardWidth}
+                      cardHeight={layout.cardHeight}
+                      cardNumber={pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1}
+                      showSetTitle={localSet.title}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
       </div>
     </div>
   )

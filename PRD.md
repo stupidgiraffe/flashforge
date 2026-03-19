@@ -40,12 +40,12 @@ This app requires sophisticated print layout engines, duplex alignment calculati
 - **Progression**: Define front/back content → Choose flip edge → Preview alignment → Test print → Adjust offsets → Export
 - **Success criteria**: Backs align with fronts when printed duplex, offset controls compensate for printer quirks
 
-### Test Generation
-- **Functionality**: Create printable tests from flashcard data with multiple question types
+### Test Generation ✅
+- **Functionality**: Create printable tests from flashcard data with multiple question types (picture-to-word, word-to-translation, multiple choice, matching, fill-in-the-blank, short answer)
 - **Purpose**: Generate assessments quickly from existing materials
 - **Trigger**: Click "Generate Test" from a set
-- **Progression**: Choose question types → Select subset → Configure layout → Preview → Export with answer key
-- **Success criteria**: Tests format cleanly, questions don't split across pages, answer key matches
+- **Progression**: Choose question types → Configure settings (number of questions, randomization, word bank) → Preview test and answer key → Print or export
+- **Success criteria**: Tests format cleanly, questions don't split across pages, answer key matches, multiple question types supported, word bank functionality works
 
 ### PDF Export
 - **Functionality**: Export print-ready PDFs with clean page breaks and crisp text
