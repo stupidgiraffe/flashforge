@@ -266,7 +266,7 @@ function App() {
                       </div>
                       {set.cards.length > 0 && (
                         <div className="mt-3 p-3 rounded-lg bg-muted/50 text-sm text-muted-foreground line-clamp-2">
-                          {set.cards.slice(0, 2).map(c => c.frontText).filter(Boolean).join(' · ') || 'No text content yet'}
+                          {set.cards.slice(0, 2).map(c => c.frontText).filter(text => text && text.trim()).join(' · ') || 'No text content yet'}
                         </div>
                       )}
                     </CardContent>
@@ -766,7 +766,7 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                         duplexMode,
                         localSet.printSettings.orientation,
                       )
-                      const paddedPage: (typeof pageCards[0] | null)[] = Array(localSet.printSettings.cardsPerPage).fill(null)
+                      const paddedPage: (typeof pageCards[0] | null)[] = Array.from({ length: localSet.printSettings.cardsPerPage }, () => null)
                       pageCards.forEach((card, i) => { paddedPage[i] = card })
                       return backPositions.map((pos) => paddedPage[pos])
                     })()

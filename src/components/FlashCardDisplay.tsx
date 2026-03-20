@@ -41,7 +41,7 @@ export function FlashCardDisplay({
   const borderClass = settings.showBorder ? 'border-2' : 'border-0'
   const roundedClass = settings.showRoundedCorners ? 'rounded-xl' : 'rounded-none'
 
-  const imageHeight = printMode ? cardHeight * 0.5 : cardHeight * 0.5
+  const imageHeight = cardHeight * 0.5
 
   return (
     <div
