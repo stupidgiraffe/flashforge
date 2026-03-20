@@ -10,6 +10,7 @@ interface FlashCardDisplayProps {
   cardNumber?: number
   side?: 'front' | 'back'
   showSetTitle?: string
+  printMode?: boolean
 }
 
 export function FlashCardDisplay({
@@ -20,6 +21,7 @@ export function FlashCardDisplay({
   cardNumber,
   side = 'front',
   showSetTitle,
+  printMode = false,
 }: FlashCardDisplayProps) {
   const isFront = side === 'front'
   const text = isFront ? card.frontText : card.backText
@@ -50,8 +52,8 @@ export function FlashCardDisplay({
         roundedClass
       )}
       style={{
-        width: `${cardWidth}px`,
-        height: `${cardHeight}px`,
+        width: printMode ? '100%' : `${cardWidth}px`,
+        height: printMode ? '100%' : `${cardHeight}px`,
         borderColor: settings.mainColor,
         borderWidth: settings.showBorder ? `${settings.borderThickness}px` : 0,
         borderRadius: settings.showRoundedCorners ? `${settings.cornerRadius}px` : 0,

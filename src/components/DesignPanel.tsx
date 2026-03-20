@@ -4,8 +4,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
-import type { PrintSettings, CardTheme } from '@/lib/types'
-import { Palette, TextAlignCenter, TextAlignLeft, TextAlignRight } from '@phosphor-icons/react'
+import type { PrintSettings, CardTheme, DuplexMode } from '@/lib/types'
+import { Palette, TextAlignCenter, TextAlignLeft, TextAlignRight, ArrowsCounterClockwise } from '@phosphor-icons/react'
 
 interface DesignPanelProps {
   settings: PrintSettings
@@ -309,6 +309,41 @@ export function DesignPanel({ settings, onUpdate }: DesignPanelProps) {
               onChange={(e) => onUpdate({ footerText: e.target.value })}
               placeholder="e.g., Teacher Name, Class Period"
             />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-2">
+        <CardHeader className="bg-muted/30">
+          <CardTitle className="flex items-center gap-2">
+            <ArrowsCounterClockwise className="w-5 h-5" weight="duotone" />
+            Double-Sided Printing
+          </CardTitle>
+          <CardDescription>Configure duplex printing alignment</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4 pt-6">
+          <div className="space-y-2">
+            <Label htmlFor="duplex-mode">Duplex Mode</Label>
+            <Select
+              value={settings.duplexMode || 'long-edge'}
+              onValueChange={(value: DuplexMode) => onUpdate({ duplexMode: value })}
+            >
+              <SelectTrigger id="duplex-mode">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="long-edge">Long-Edge Flip (standard portrait)</SelectItem>
+                <SelectItem value="short-edge">Short-Edge Flip (landscape / flip-up)</SelectItem>
+                <SelectItem value="manual">Manual (front pages only)</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {settings.duplexMode === 'manual'
+                ? 'Only front sides will be printed. Back sides must be printed separately.'
+                : settings.duplexMode === 'short-edge'
+                ? 'Use for landscape orientation or flip-up binding. Cards are mirrored vertically.'
+                : 'Standard duplex for portrait pages. Cards are mirrored horizontally after flipping.'}
+            </p>
           </div>
         </CardContent>
       </Card>

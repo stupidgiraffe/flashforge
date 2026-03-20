@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
-import { Plus, Printer, DownloadSimple, Exam, Image as ImageIcon, Trash, ArrowLeft } from '@phosphor-icons/react'
+import { createPortal } from 'react-dom'
+import { Plus, Printer, DownloadSimple, Exam, Image as ImageIcon, Trash, ArrowLeft, DotsThreeVertical } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -16,7 +18,7 @@ import { TestDisplay, AnswerKey } from '@/components/TestDisplay'
 import { TestConfigDialog } from '@/components/TestConfigDialog'
 import { DesignPanel } from '@/components/DesignPanel'
 import { generateTestQuestions } from '@/lib/test-utils'
-import { calculatePrintLayout, paginateCards } from '@/lib/print-utils'
+import { calculatePrintLayout, paginateCards, calculateBackPagePositions } from '@/lib/print-utils'
 
 function App() {
   const [sets, setSets] = useState<FlashCardSet[]>([])
@@ -112,6 +114,10 @@ function App() {
   }
 
   function handlePrint() {
+    if (currentSet && currentSet.cards.length === 0) {
+      toast.error('Add some cards before printing!')
+      return
+    }
     window.print()
   }
 
@@ -201,36 +207,68 @@ function App() {
                 </CardContent>
               </Card>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {sets.map((set) => (
                   <Card
                     key={set.id}
-                    className="cursor-pointer hover:shadow-xl transition-all duration-300 hover:scale-105 border-2 hover:border-primary/50"
+                    className="cursor-pointer hover:shadow-xl transition-all duration-300 hover:-translate-y-1 border-2 hover:border-primary/50 group"
                     onClick={() => setCurrentSet(set)}
                   >
-                    <CardHeader>
-                      <CardTitle className="text-xl">{set.title}</CardTitle>
-                      {set.subtitle && (
-                        <CardDescription className="text-base">{set.subtitle}</CardDescription>
-                      )}
-                    </CardHeader>
-                    <CardContent>
-                      <div className="flex items-center justify-between text-sm text-muted-foreground mb-4">
-                        <span className="font-medium">{set.cards.length} cards</span>
-                        {set.className && <span className="font-medium">{set.className}</span>}
+                    <CardHeader className="pb-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <CardTitle className="text-xl truncate">{set.title}</CardTitle>
+                          {set.subtitle && (
+                            <CardDescription className="text-sm mt-1 truncate">{set.subtitle}</CardDescription>
+                          )}
+                        </div>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 h-8 w-8 p-0"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <DotsThreeVertical className="w-4 h-4" weight="bold" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              className="text-destructive focus:text-destructive"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleDeleteSet(set.id)
+                              }}
+                            >
+                              <Trash className="mr-2 w-4 h-4" weight="bold" />
+                              Delete Set
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        className="w-full"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleDeleteSet(set.id)
-                        }}
-                      >
-                        <Trash className="mr-2" weight="bold" />
-                        Delete
-                      </Button>
+                    </CardHeader>
+                    <CardContent className="pt-0">
+                      <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 text-primary px-2.5 py-0.5 font-medium text-xs">
+                          {set.cards.length} card{set.cards.length !== 1 ? 's' : ''}
+                        </span>
+                        {set.className && (
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-muted text-muted-foreground px-2.5 py-0.5 font-medium text-xs">
+                            {set.className}
+                          </span>
+                        )}
+                        {set.cardType === 'double-sided' && (
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-accent/20 text-accent-foreground px-2.5 py-0.5 font-medium text-xs">
+                            Double-sided
+                          </span>
+                        )}
+                      </div>
+                      {set.cards.length > 0 && (
+                        <div className="mt-3 p-3 rounded-lg bg-muted/50 text-sm text-muted-foreground line-clamp-2">
+                          {set.cards.slice(0, 2).map(c => c.frontText).filter(text => text && text.trim()).join(' · ') || 'No text content yet'}
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 ))}
@@ -603,35 +641,49 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
             <CardHeader>
               <CardTitle className="text-2xl">Print Preview</CardTitle>
               <CardDescription className="text-base">
-                {pages.length} page{pages.length !== 1 ? 's' : ''} · {localSet.cards.length} card{localSet.cards.length !== 1 ? 's' : ''}
+                {pages.length} page{pages.length !== 1 ? 's' : ''}
+                {localSet.cardType === 'double-sided' && localSet.printSettings.duplexMode !== 'manual'
+                  ? ` front + ${pages.length} back`
+                  : ''}
+                {' · '}{localSet.cards.length} card{localSet.cards.length !== 1 ? 's' : ''}
               </CardDescription>
             </CardHeader>
-            <CardContent className="overflow-x-auto">
-              <div className="space-y-12 min-w-min">
+            <CardContent className="overflow-x-auto bg-muted/30 rounded-b-xl p-6">
+              <div className="space-y-8 min-w-min flex flex-col items-center">
                 {pages.map((pageCards, pageIndex) => (
-                  <div key={pageIndex} className="border-2 rounded-xl p-4 md:p-8 bg-white shadow-md min-w-[320px]">
-                    <p className="text-sm md:text-base font-semibold mb-4 md:mb-6 text-muted-foreground">Page {pageIndex + 1}</p>
+                  <div key={pageIndex} className="flex flex-col items-center gap-2">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                      Page {pageIndex + 1} — Front
+                    </p>
                     <div
-                      className="grid gap-2 md:gap-4 w-full"
+                      className="bg-white rounded shadow-[0_4px_24px_rgba(0,0,0,0.18)] border border-gray-200"
                       style={{
-                        gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
-                        aspectRatio: `${layout.cols} / ${layout.rows}`,
+                        padding: `${layout.marginTop * 0.5}px ${layout.marginLeft * 0.5}px`,
+                        aspectRatio: `${layout.pageWidth} / ${layout.pageHeight}`,
+                        width: `${layout.pageWidth * 0.5}px`,
+                        maxWidth: '90vw',
                       }}
                     >
-                      {pageCards.map((card, cardIndex) => {
-                        const scaleFactor = typeof window !== 'undefined' && window.innerWidth < 768 ? 0.3 : 0.5
-                        return (
+                      <div
+                        className="grid w-full h-full"
+                        style={{
+                          gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
+                          gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
+                          gap: `${layout.gapY * 0.5}px ${layout.gapX * 0.5}px`,
+                        }}
+                      >
+                        {pageCards.map((card, cardIndex) => (
                           <FlashCardDisplay
                             key={card.id}
                             card={card}
                             settings={localSet.printSettings}
-                            cardWidth={layout.cardWidth * scaleFactor}
-                            cardHeight={layout.cardHeight * scaleFactor}
+                            cardWidth={layout.cardWidth * 0.5}
+                            cardHeight={layout.cardHeight * 0.5}
                             cardNumber={pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1}
                             showSetTitle={localSet.title}
                           />
-                        )
-                      })}
+                        ))}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -675,69 +727,149 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
         )}
       </Tabs>
 
-      <div className="print-only" style={{ position: 'relative' }}>
-        {generatedTest ? (
-          <>
-            <div className="page-break-after">
-              <TestDisplay
-                questions={generatedTest}
-                settings={localSet.testSettings}
-                showAnswers={false}
-              />
-            </div>
-            
-            {localSet.testSettings.includeAnswerKey && (
-              <div>
-                <AnswerKey
+      {createPortal(
+        <div className="print-only">
+          {generatedTest ? (
+            <>
+              <div className="page-break-after">
+                <TestDisplay
                   questions={generatedTest}
                   settings={localSet.testSettings}
+                  showAnswers={false}
                 />
               </div>
-            )}
-          </>
-        ) : (
-          <>
-            {pages.map((pageCards, pageIndex) => (
-              <div
-                key={pageIndex}
-                className="avoid-break"
-                style={{
-                  width: '100vw',
-                  height: '100vh',
-                  position: 'relative',
-                  padding: `${layout.marginTop}px ${layout.marginRight}px ${layout.marginBottom}px ${layout.marginLeft}px`,
-                  pageBreakAfter: pageIndex < pages.length - 1 ? 'always' : 'auto',
-                  breakAfter: pageIndex < pages.length - 1 ? 'page' : 'auto',
-                  boxSizing: 'border-box',
-                }}
-              >
-                <div
-                  className="grid"
-                  style={{
-                    gridTemplateColumns: `repeat(${layout.cols}, 1fr)`,
-                    gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
-                    gap: `${layout.gapY}px ${layout.gapX}px`,
-                    width: '100%',
-                    height: '100%',
-                  }}
-                >
-                  {pageCards.map((card, cardIndex) => (
-                    <FlashCardDisplay
-                      key={card.id}
-                      card={card}
-                      settings={localSet.printSettings}
-                      cardWidth={layout.cardWidth}
-                      cardHeight={layout.cardHeight}
-                      cardNumber={pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1}
-                      showSetTitle={localSet.title}
-                    />
-                  ))}
+
+              {localSet.testSettings.includeAnswerKey && (
+                <div>
+                  <AnswerKey
+                    questions={generatedTest}
+                    settings={localSet.testSettings}
+                  />
                 </div>
-              </div>
-            ))}
-          </>
-        )}
-      </div>
+              )}
+            </>
+          ) : (
+            <>
+              {pages.map((pageCards, pageIndex) => {
+                const isLastPage = pageIndex === pages.length - 1
+                const isDoubleSided =
+                  localSet.cardType === 'double-sided' &&
+                  localSet.printSettings.duplexMode &&
+                  localSet.printSettings.duplexMode !== 'manual'
+
+                // Build back page cards (mirrored for duplex alignment)
+                const backPageCards = isDoubleSided
+                  ? (() => {
+                      const duplexMode = localSet.printSettings.duplexMode as 'long-edge' | 'short-edge'
+                      const backPositions = calculateBackPagePositions(
+                        localSet.printSettings.cardsPerPage,
+                        duplexMode,
+                        localSet.printSettings.orientation,
+                      )
+                      const paddedPage: (typeof pageCards[0] | null)[] = Array.from({ length: localSet.printSettings.cardsPerPage }, () => null)
+                      pageCards.forEach((card, i) => { paddedPage[i] = card })
+                      return backPositions.map((pos) => paddedPage[pos])
+                    })()
+                  : null
+
+                return (
+                  <div key={pageIndex}>
+                    {/* Front page */}
+                    <div
+                      className="avoid-break"
+                      style={{
+                        width: localSet.printSettings.paperSize === 'a4'
+                          ? (localSet.printSettings.orientation === 'landscape' ? '297mm' : '210mm')
+                          : (localSet.printSettings.orientation === 'landscape' ? '11in' : '8.5in'),
+                        height: localSet.printSettings.paperSize === 'a4'
+                          ? (localSet.printSettings.orientation === 'landscape' ? '210mm' : '297mm')
+                          : (localSet.printSettings.orientation === 'landscape' ? '8.5in' : '11in'),
+                        padding: `${layout.marginTop}px ${layout.marginRight}px ${layout.marginBottom}px ${layout.marginLeft}px`,
+                        pageBreakAfter: 'always',
+                        breakAfter: 'page',
+                        boxSizing: 'border-box',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        className="grid"
+                        style={{
+                          gridTemplateColumns: `repeat(${layout.cols}, 1fr)`,
+                          gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
+                          gap: `${layout.gapY}px ${layout.gapX}px`,
+                          width: '100%',
+                          height: '100%',
+                        }}
+                      >
+                        {pageCards.map((card, cardIndex) => (
+                          <FlashCardDisplay
+                            key={card.id}
+                            card={card}
+                            settings={localSet.printSettings}
+                            cardWidth={layout.cardWidth}
+                            cardHeight={layout.cardHeight}
+                            cardNumber={pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1}
+                            showSetTitle={localSet.title}
+                            printMode={true}
+                          />
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Back page (duplex only) */}
+                    {isDoubleSided && backPageCards && (
+                      <div
+                        className="avoid-break"
+                        style={{
+                          width: localSet.printSettings.paperSize === 'a4'
+                            ? (localSet.printSettings.orientation === 'landscape' ? '297mm' : '210mm')
+                            : (localSet.printSettings.orientation === 'landscape' ? '11in' : '8.5in'),
+                          height: localSet.printSettings.paperSize === 'a4'
+                            ? (localSet.printSettings.orientation === 'landscape' ? '210mm' : '297mm')
+                            : (localSet.printSettings.orientation === 'landscape' ? '8.5in' : '11in'),
+                          padding: `${layout.marginTop}px ${layout.marginRight}px ${layout.marginBottom}px ${layout.marginLeft}px`,
+                          pageBreakAfter: isLastPage ? 'auto' : 'always',
+                          breakAfter: isLastPage ? 'auto' : 'page',
+                          boxSizing: 'border-box',
+                          overflow: 'hidden',
+                        }}
+                      >
+                        <div
+                          className="grid"
+                          style={{
+                            gridTemplateColumns: `repeat(${layout.cols}, 1fr)`,
+                            gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
+                            gap: `${layout.gapY}px ${layout.gapX}px`,
+                            width: '100%',
+                            height: '100%',
+                          }}
+                        >
+                          {backPageCards.map((card, cardIndex) =>
+                            card ? (
+                              <FlashCardDisplay
+                                key={`back-${card.id}`}
+                                card={card}
+                                settings={localSet.printSettings}
+                                cardWidth={layout.cardWidth}
+                                cardHeight={layout.cardHeight}
+                                side="back"
+                                printMode={true}
+                              />
+                            ) : (
+                              <div key={`empty-${cardIndex}`} />
+                            ),
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </>
+          )}
+        </div>,
+        document.body,
+      )}
     </div>
   )
 }

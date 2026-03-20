@@ -121,13 +121,12 @@
     text-shadow: none !important;
   }
   
-  body > div:not(.print-only) {
+  /* Hide the React root; the print-only portal (direct child of body) remains visible */
+  #root {
     display: none !important;
   }
   
   .print-only {
     display: block !important;
-    page-break-inside: avoid;
-    break-inside: avoid;
   }
 }
