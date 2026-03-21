@@ -790,10 +790,20 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                           { length: localSet.printSettings.cardsPerPage },
                           () => null,
                         )
-                        pageCards.forEach((card, i) => { paddedPage[i] = card })
+                        pageCards.forEach((card, i) => {
+                          paddedPage[i] = card
+                        })
                         return backPositions.map((pos) => paddedPage[pos])
                       })()
                     : null
+
+                  const previewPageStyle = {
+                    padding: `${layout.marginTop * 0.5}px ${layout.marginRight * 0.5}px ${layout.marginBottom * 0.5}px ${layout.marginLeft * 0.5}px`,
+                    width: `${layout.pageWidth * 0.5}px`,
+                    height: `${layout.pageHeight * 0.5}px`,
+                    maxWidth: '90vw',
+                    boxSizing: 'border-box' as const,
+                  }
 
                   return (
                     <div key={pageIndex} className="flex flex-col items-center gap-2">
@@ -802,13 +812,7 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                       </p>
                       <div
                         className="bg-white rounded shadow-[0_4px_24px_rgba(0,0,0,0.18)] border border-gray-200"
-                        style={{
-                          padding: `${layout.marginTop * 0.5}px ${layout.marginRight * 0.5}px ${layout.marginBottom * 0.5}px ${layout.marginLeft * 0.5}px`,
-                          width: `${layout.pageWidth * 0.5}px`,
-                          height: `${layout.pageHeight * 0.5}px`,
-                          maxWidth: '90vw',
-                          boxSizing: 'border-box',
-                        }}
+                        style={previewPageStyle}
                       >
                         <div
                           className="grid w-full h-full"
@@ -839,13 +843,7 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                           </p>
                           <div
                             className="bg-white rounded shadow-[0_4px_24px_rgba(0,0,0,0.18)] border border-gray-200"
-                            style={{
-                              padding: `${layout.marginTop * 0.5}px ${layout.marginRight * 0.5}px ${layout.marginBottom * 0.5}px ${layout.marginLeft * 0.5}px`,
-                              width: `${layout.pageWidth * 0.5}px`,
-                              height: `${layout.pageHeight * 0.5}px`,
-                              maxWidth: '90vw',
-                              boxSizing: 'border-box',
-                            }}
+                            style={previewPageStyle}
                           >
                             <div
                               className="grid w-full h-full"
