@@ -211,6 +211,14 @@ Create `vercel.json` in your project root for advanced configuration:
 
 This is more than enough for classroom use.
 
+## Dependency Notes
+
+### ESLint major version updates are intentionally ignored
+
+Dependabot is configured (`.github/dependabot.yml`) to skip major version bumps for `eslint` and `eslint-plugin-react-hooks`. This prevents automated PRs that would bump ESLint from v9 to v10+ while `eslint-plugin-react-hooks` still only supports up to ESLint v9. Such a bump causes `npm install` to fail with an `ERESOLVE` peer dependency conflict, breaking Vercel builds.
+
+When `eslint-plugin-react-hooks` (or other ESLint plugins) officially support ESLint v10+, you can remove the ignore rules from `.github/dependabot.yml` and upgrade manually.
+
 ## Support
 
 - [Vercel Documentation](https://vercel.com/docs)
