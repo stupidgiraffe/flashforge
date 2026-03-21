@@ -16,6 +16,9 @@ export const PAPER_SIZES = {
 
 const SAFE_MARGIN = 0.5 * INCH_TO_PX
 
+// Standard index card aspect ratio (width : height = 3 : 2)
+const TARGET_ASPECT_RATIO = 3 / 2
+
 export function calculatePrintLayout(
   cardsPerPage: CardsPerPage,
   paperSize: PaperSize,
@@ -36,8 +39,31 @@ export function calculatePrintLayout(
   const gapX = 12
   const gapY = 12
 
-  const cardWidth = (availableWidth - gapX * (cols - 1)) / cols
-  const cardHeight = (availableHeight - gapY * (rows - 1)) / rows
+  const maxCardWidth = (availableWidth - gapX * (cols - 1)) / cols
+  const maxCardHeight = (availableHeight - gapY * (rows - 1)) / rows
+
+  // Constrain card dimensions to maintain a consistent aspect ratio
+  let cardWidth: number
+  let cardHeight: number
+  if (maxCardWidth / maxCardHeight > TARGET_ASPECT_RATIO) {
+    // Height is the binding constraint
+    cardHeight = maxCardHeight
+    cardWidth = cardHeight * TARGET_ASPECT_RATIO
+  } else {
+    // Width is the binding constraint
+    cardWidth = maxCardWidth
+    cardHeight = cardWidth / TARGET_ASPECT_RATIO
+  }
+
+  // Center the grid within the available area by distributing extra space as margin
+  const gridWidth = cardWidth * cols + gapX * (cols - 1)
+  const gridHeight = cardHeight * rows + gapY * (rows - 1)
+  const extraH = availableWidth - gridWidth
+  const extraV = availableHeight - gridHeight
+  const marginLeft = SAFE_MARGIN + extraH / 2
+  const marginRight = SAFE_MARGIN + extraH / 2
+  const marginTop = SAFE_MARGIN + extraV / 2
+  const marginBottom = SAFE_MARGIN + extraV / 2
 
   return {
     cardsPerPage,
@@ -47,10 +73,10 @@ export function calculatePrintLayout(
     cols,
     pageWidth,
     pageHeight,
-    marginTop: SAFE_MARGIN,
-    marginRight: SAFE_MARGIN,
-    marginBottom: SAFE_MARGIN,
-    marginLeft: SAFE_MARGIN,
+    marginTop,
+    marginRight,
+    marginBottom,
+    marginLeft,
     gapX,
     gapY,
   }
