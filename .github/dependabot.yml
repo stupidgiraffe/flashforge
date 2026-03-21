@@ -3,7 +3,14 @@ updates:
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+    ignore:
+      - dependency-name: "eslint"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "eslint-plugin-react-hooks"
+        update-types:
+          - "version-update:semver-major"
 
   - package-ecosystem: "devcontainers"
     directory: "/"
