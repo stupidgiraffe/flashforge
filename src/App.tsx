@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus, Printer, DownloadSimple, Exam, Image as ImageIcon, Trash, ArrowLeft, DotsThreeVertical } from '@phosphor-icons/react'
+import { Plus, Printer, DownloadSimple, UploadSimple, Exam, Image as ImageIcon, Trash, ArrowLeft, DotsThreeVertical } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { toast, Toaster } from 'sonner'
 import type { FlashCardSet, FlashCard } from '@/lib/types'
 import { DEFAULT_PRINT_SETTINGS, DEFAULT_TEST_SETTINGS } from '@/lib/types'
-import { loadSets, saveSet, deleteSet, generateUniqueId, compressImage } from '@/lib/storage'
+import { loadSets, saveSet, deleteSet, generateUniqueId, compressImage, exportSetToJSON, importSetFromJSON, exportAllSetsToJSON, importAllSetsFromJSON } from '@/lib/storage'
 import { FlashCardDisplay } from '@/components/FlashCardDisplay'
 import { TestDisplay, AnswerKey } from '@/components/TestDisplay'
 import { TestConfigDialog } from '@/components/TestConfigDialog'
@@ -25,6 +25,8 @@ function App() {
   const [currentSet, setCurrentSet] = useState<FlashCardSet | null>(null)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [newSetTitle, setNewSetTitle] = useState('')
+  const importSetInputRef = useRef<HTMLInputElement | null>(null)
+  const importBackupInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     const loaded = loadSets()
@@ -113,6 +115,54 @@ function App() {
     toast.success('Set deleted')
   }
 
+  function handleImportSet(file: File) {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const json = e.target?.result as string
+        const imported = importSetFromJSON(json)
+        saveSet(imported)
+        setSets((prev) => [...prev, imported])
+        toast.success(`Imported "${imported.title}"`)
+      } catch {
+        toast.error('Failed to import set. Make sure it is a valid FlashForge JSON file.')
+      }
+    }
+    reader.readAsText(file)
+  }
+
+  function handleImportBackup(file: File) {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const json = e.target?.result as string
+        const imported = importAllSetsFromJSON(json)
+        imported.forEach((s) => saveSet(s))
+        setSets((prev) => [...prev, ...imported])
+        toast.success(`Imported ${imported.length} set${imported.length !== 1 ? 's' : ''} from backup`)
+      } catch {
+        toast.error('Failed to import backup. Make sure it is a valid FlashForge backup file.')
+      }
+    }
+    reader.readAsText(file)
+  }
+
+  function handleExportBackup() {
+    if (sets.length === 0) {
+      toast.error('No sets to export')
+      return
+    }
+    const json = exportAllSetsToJSON(sets)
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `flashforge-backup-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success('Backup downloaded!')
+  }
+
   function handlePrint() {
     if (currentSet && currentSet.cards.length === 0) {
       toast.error('Add some cards before printing!')
@@ -135,6 +185,58 @@ function App() {
           </div>
           
           <div className="flex gap-3">
+            {!currentSet && (
+              <>
+                <input
+                  ref={importSetInputRef}
+                  type="file"
+                  accept=".json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) {
+                      handleImportSet(file)
+                      e.target.value = ''
+                    }
+                  }}
+                />
+                <input
+                  ref={importBackupInputRef}
+                  type="file"
+                  accept=".json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) {
+                      handleImportBackup(file)
+                      e.target.value = ''
+                    }
+                  }}
+                />
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="shadow-md">
+                      <DownloadSimple className="mr-2" weight="bold" />
+                      Backup
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={handleExportBackup}>
+                      <DownloadSimple className="mr-2 w-4 h-4" weight="bold" />
+                      Download All Sets
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => importBackupInputRef.current?.click()}>
+                      <UploadSimple className="mr-2 w-4 h-4" weight="bold" />
+                      Restore from Backup
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => importSetInputRef.current?.click()}>
+                      <UploadSimple className="mr-2 w-4 h-4" weight="bold" />
+                      Import a Set
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
+            )}
             <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
               <DialogTrigger asChild>
                 <Button className="shadow-md">
@@ -394,6 +496,18 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
     })
   }
 
+  function handleExportSet() {
+    const json = exportSetToJSON(localSet)
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${localSet.title.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success('Set exported!')
+  }
+
   const layout = calculatePrintLayout(
     localSet.printSettings.cardsPerPage,
     localSet.printSettings.paperSize,
@@ -412,6 +526,10 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
           <h2 className="text-3xl font-bold">{localSet.title}</h2>
           {localSet.subtitle && <p className="text-muted-foreground mt-1">{localSet.subtitle}</p>}
         </div>
+        <Button variant="outline" onClick={handleExportSet} className="shadow-md">
+          <DownloadSimple className="mr-2" weight="bold" />
+          Export Set
+        </Button>
         <Button onClick={addCard} size="lg" className="shadow-md">
           <Plus className="mr-2" weight="bold" />
           Add Card
@@ -627,11 +745,15 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
         <TabsContent value="design" className="space-y-6 mt-6">
           <DesignPanel
             settings={localSet.printSettings}
+            cardType={localSet.cardType}
             onUpdate={(updates) => {
               setLocalSet({
                 ...localSet,
                 printSettings: { ...localSet.printSettings, ...updates },
               })
+            }}
+            onUpdateCardType={(cardType) => {
+              setLocalSet({ ...localSet, cardType })
             }}
           />
         </TabsContent>
@@ -650,43 +772,110 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
             </CardHeader>
             <CardContent className="overflow-x-auto bg-muted/30 rounded-b-xl p-6">
               <div className="space-y-8 min-w-min flex flex-col items-center">
-                {pages.map((pageCards, pageIndex) => (
-                  <div key={pageIndex} className="flex flex-col items-center gap-2">
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                      Page {pageIndex + 1} — Front
-                    </p>
-                    <div
-                      className="bg-white rounded shadow-[0_4px_24px_rgba(0,0,0,0.18)] border border-gray-200"
-                      style={{
-                        padding: `${layout.marginTop * 0.5}px ${layout.marginLeft * 0.5}px`,
-                        aspectRatio: `${layout.pageWidth} / ${layout.pageHeight}`,
-                        width: `${layout.pageWidth * 0.5}px`,
-                        maxWidth: '90vw',
-                      }}
-                    >
+                {pages.map((pageCards, pageIndex) => {
+                  const isDoubleSidedPreview =
+                    localSet.cardType === 'double-sided' &&
+                    localSet.printSettings.duplexMode &&
+                    localSet.printSettings.duplexMode !== 'manual'
+
+                  const backPageCardsPreview = isDoubleSidedPreview
+                    ? (() => {
+                        const duplexMode = localSet.printSettings.duplexMode as 'long-edge' | 'short-edge'
+                        const backPositions = calculateBackPagePositions(
+                          localSet.printSettings.cardsPerPage,
+                          duplexMode,
+                          localSet.printSettings.orientation,
+                        )
+                        const paddedPage: (typeof pageCards[0] | null)[] = Array.from(
+                          { length: localSet.printSettings.cardsPerPage },
+                          () => null,
+                        )
+                        pageCards.forEach((card, i) => { paddedPage[i] = card })
+                        return backPositions.map((pos) => paddedPage[pos])
+                      })()
+                    : null
+
+                  return (
+                    <div key={pageIndex} className="flex flex-col items-center gap-2">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                        Page {pageIndex + 1} — Front
+                      </p>
                       <div
-                        className="grid w-full h-full"
+                        className="bg-white rounded shadow-[0_4px_24px_rgba(0,0,0,0.18)] border border-gray-200"
                         style={{
-                          gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
-                          gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
-                          gap: `${layout.gapY * 0.5}px ${layout.gapX * 0.5}px`,
+                          padding: `${layout.marginTop * 0.5}px ${layout.marginRight * 0.5}px ${layout.marginBottom * 0.5}px ${layout.marginLeft * 0.5}px`,
+                          width: `${layout.pageWidth * 0.5}px`,
+                          height: `${layout.pageHeight * 0.5}px`,
+                          maxWidth: '90vw',
+                          boxSizing: 'border-box',
                         }}
                       >
-                        {pageCards.map((card, cardIndex) => (
-                          <FlashCardDisplay
-                            key={card.id}
-                            card={card}
-                            settings={localSet.printSettings}
-                            cardWidth={layout.cardWidth * 0.5}
-                            cardHeight={layout.cardHeight * 0.5}
-                            cardNumber={pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1}
-                            showSetTitle={localSet.title}
-                          />
-                        ))}
+                        <div
+                          className="grid w-full h-full"
+                          style={{
+                            gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
+                            gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
+                            gap: `${layout.gapY * 0.5}px ${layout.gapX * 0.5}px`,
+                          }}
+                        >
+                          {pageCards.map((card, cardIndex) => (
+                            <FlashCardDisplay
+                              key={card.id}
+                              card={card}
+                              settings={localSet.printSettings}
+                              cardWidth={layout.cardWidth * 0.5}
+                              cardHeight={layout.cardHeight * 0.5}
+                              cardNumber={pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1}
+                              showSetTitle={localSet.title}
+                            />
+                          ))}
+                        </div>
                       </div>
+
+                      {isDoubleSidedPreview && backPageCardsPreview && (
+                        <>
+                          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mt-4">
+                            Page {pageIndex + 1} — Back
+                          </p>
+                          <div
+                            className="bg-white rounded shadow-[0_4px_24px_rgba(0,0,0,0.18)] border border-gray-200"
+                            style={{
+                              padding: `${layout.marginTop * 0.5}px ${layout.marginRight * 0.5}px ${layout.marginBottom * 0.5}px ${layout.marginLeft * 0.5}px`,
+                              width: `${layout.pageWidth * 0.5}px`,
+                              height: `${layout.pageHeight * 0.5}px`,
+                              maxWidth: '90vw',
+                              boxSizing: 'border-box',
+                            }}
+                          >
+                            <div
+                              className="grid w-full h-full"
+                              style={{
+                                gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
+                                gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
+                                gap: `${layout.gapY * 0.5}px ${layout.gapX * 0.5}px`,
+                              }}
+                            >
+                              {backPageCardsPreview.map((card, cardIndex) =>
+                                card ? (
+                                  <FlashCardDisplay
+                                    key={`back-${card.id}`}
+                                    card={card}
+                                    settings={localSet.printSettings}
+                                    cardWidth={layout.cardWidth * 0.5}
+                                    cardHeight={layout.cardHeight * 0.5}
+                                    side="back"
+                                  />
+                                ) : (
+                                  <div key={`empty-${cardIndex}`} />
+                                ),
+                              )}
+                            </div>
+                          </div>
+                        </>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </CardContent>
           </Card>

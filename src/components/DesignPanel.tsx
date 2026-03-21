@@ -4,12 +4,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
-import type { PrintSettings, CardTheme, DuplexMode } from '@/lib/types'
-import { Palette, TextAlignCenter, TextAlignLeft, TextAlignRight, ArrowsCounterClockwise } from '@phosphor-icons/react'
+import type { PrintSettings, CardTheme, DuplexMode, CardType, CardsPerPage } from '@/lib/types'
+import { Palette, TextAlignCenter, TextAlignLeft, TextAlignRight, ArrowsCounterClockwise, Cards } from '@phosphor-icons/react'
 
 interface DesignPanelProps {
   settings: PrintSettings
+  cardType: CardType
   onUpdate: (updates: Partial<PrintSettings>) => void
+  onUpdateCardType: (cardType: CardType) => void
 }
 
 const CARD_THEMES: { value: CardTheme; label: string; description: string }[] = [
@@ -38,7 +40,9 @@ const COLOR_SCHEMES = [
   { name: 'Warm', main: '#ea580c', accent: '#fbbf24' },
 ]
 
-export function DesignPanel({ settings, onUpdate }: DesignPanelProps) {
+const CARDS_PER_PAGE_OPTIONS: CardsPerPage[] = [1, 2, 4, 6, 8, 9, 10, 12]
+
+export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: DesignPanelProps) {
   const getAlignmentIcon = () => {
     switch (settings.textAlignment) {
       case 'left':
@@ -52,6 +56,58 @@ export function DesignPanel({ settings, onUpdate }: DesignPanelProps) {
 
   return (
     <div className="space-y-6">
+      <Card className="border-2">
+        <CardHeader className="bg-muted/30">
+          <CardTitle className="flex items-center gap-2">
+            <Cards className="w-5 h-5" weight="duotone" />
+            Print Layout
+          </CardTitle>
+          <CardDescription>Card type and how many cards print per page</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6 pt-6">
+          <div className="space-y-3">
+            <Label>Card Type</Label>
+            <div className="grid grid-cols-2 gap-3">
+              {(['single-sided', 'double-sided'] as CardType[]).map((type) => (
+                <button
+                  key={type}
+                  onClick={() => onUpdateCardType(type)}
+                  className={`p-4 rounded-lg border-2 text-left transition-all hover:shadow-md ${
+                    cardType === type
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/50'
+                  }`}
+                >
+                  <div className="font-semibold text-sm mb-1 capitalize">{type.replace('-', ' ')}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {type === 'single-sided' ? 'Print front side only' : 'Print front & back sides'}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <Label>Cards Per Page</Label>
+            <div className="grid grid-cols-4 gap-2">
+              {CARDS_PER_PAGE_OPTIONS.map((count) => (
+                <button
+                  key={count}
+                  onClick={() => onUpdate({ cardsPerPage: count })}
+                  className={`p-3 rounded-lg border-2 text-center font-semibold transition-all hover:shadow-md ${
+                    settings.cardsPerPage === count
+                      ? 'border-primary bg-primary/5 text-primary'
+                      : 'border-border hover:border-primary/50'
+                  }`}
+                >
+                  {count}
+                </button>
+              ))}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       <Card className="border-2">
         <CardHeader className="bg-muted/30">
           <CardTitle className="flex items-center gap-2">

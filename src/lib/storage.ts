@@ -65,10 +65,30 @@ export function exportSetToJSON(set: FlashCardSet): string {
 
 export function importSetFromJSON(json: string): FlashCardSet {
   const set = JSON.parse(json) as FlashCardSet
-  set.id = `set-${Date.now()}`
+  set.id = generateUniqueId()
   set.createdAt = Date.now()
   set.updatedAt = Date.now()
   return set
+}
+
+export function exportAllSetsToJSON(sets: FlashCardSet[]): string {
+  const data: StorageData = {
+    version: VERSION,
+    sets,
+    lastModified: Date.now(),
+  }
+  return JSON.stringify(data, null, 2)
+}
+
+export function importAllSetsFromJSON(json: string): FlashCardSet[] {
+  const parsed = JSON.parse(json)
+  const rawSets: FlashCardSet[] = parsed.sets ?? (Array.isArray(parsed) ? parsed : [])
+  return rawSets.map((set) => ({
+    ...set,
+    id: generateUniqueId(),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  }))
 }
 
 export function generateUniqueId(): string {
