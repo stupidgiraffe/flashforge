@@ -154,7 +154,7 @@ export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
   showNumbering: false,
   showSetTitle: false,
   colorMode: 'color',
-  imageFit: 'cover',
+  imageFit: 'contain',
   captionPlacement: 'bottom',
   fontFamily: 'Inter',
   fontSize: 16,

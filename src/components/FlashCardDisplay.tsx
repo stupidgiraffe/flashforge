@@ -41,12 +41,12 @@ export function FlashCardDisplay({
   const borderClass = settings.showBorder ? 'border-2' : 'border-0'
   const roundedClass = settings.showRoundedCorners ? 'rounded-xl' : 'rounded-none'
 
-  const imageHeight = cardHeight * 0.5
+  const imageHeight = cardHeight * 0.55
 
   return (
     <div
       className={cn(
-        'relative overflow-hidden flex flex-col shadow-sm',
+        'relative overflow-hidden flex flex-col shadow-md',
         themeClasses,
         borderClass,
         roundedClass
@@ -59,6 +59,16 @@ export function FlashCardDisplay({
         borderRadius: settings.showRoundedCorners ? `${settings.cornerRadius}px` : 0,
       }}
     >
+      {/* Subtle accent bar at top of card */}
+      <div
+        className="absolute top-0 left-0 right-0 h-1"
+        style={{
+          backgroundColor: settings.accentColor,
+          opacity: 0.45,
+          borderRadius: settings.showRoundedCorners ? `${settings.cornerRadius}px ${settings.cornerRadius}px 0 0` : '0',
+        }}
+      />
+
       {settings.showNumbering && cardNumber !== undefined && (
         <div
           className="absolute top-3 left-3 text-xs font-semibold opacity-40 z-10"
@@ -80,11 +90,11 @@ export function FlashCardDisplay({
       <div className="flex-1 flex flex-col items-center justify-center p-6">
         {imageUrl && (
           <div
-            className="mb-4 rounded-lg overflow-hidden"
+            className="mb-4 rounded-lg overflow-hidden flex-shrink-0"
             style={{
               width: '100%',
               maxHeight: `${imageHeight}px`,
-              minHeight: `${Math.min(imageHeight, 120)}px`,
+              minHeight: `${Math.min(imageHeight, 140)}px`,
             }}
           >
             <img
@@ -152,12 +162,12 @@ export function FlashCardDisplay({
 
 function getThemeClasses(theme: string): string {
   const themes: Record<string, string> = {
-    minimal: 'bg-white',
+    minimal: 'bg-gradient-to-br from-white to-slate-50',
     'classroom-cute': 'bg-amber-50',
     'bold-vocabulary': 'bg-gradient-to-br from-blue-50 to-purple-50',
     'picture-focus': 'bg-gray-50',
     'ink-saver': 'bg-white',
     'quiz-card': 'bg-slate-50',
   }
-  return themes[theme] || 'bg-white'
+  return themes[theme] || 'bg-gradient-to-br from-white to-slate-50'
 }

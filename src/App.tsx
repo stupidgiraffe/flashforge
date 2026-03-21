@@ -404,6 +404,31 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
   const [showTestDialog, setShowTestDialog] = useState(false)
   const [generatedTest, setGeneratedTest] = useState<ReturnType<typeof generateTestQuestions> | null>(null)
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
+  const [previewContainerWidth, setPreviewContainerWidth] = useState(0)
+  const previewObserverRef = useRef<ResizeObserver | null>(null)
+
+  const previewContainerRef = (el: HTMLDivElement | null) => {
+    if (previewObserverRef.current) {
+      previewObserverRef.current.disconnect()
+      previewObserverRef.current = null
+    }
+    if (!el) return
+    const ro = new ResizeObserver(([entry]) => {
+      setPreviewContainerWidth(entry.contentRect.width)
+    })
+    ro.observe(el)
+    previewObserverRef.current = ro
+  }
+
+  // Ensure the ResizeObserver is disconnected when the component unmounts
+  useEffect(() => {
+    return () => {
+      if (previewObserverRef.current) {
+        previewObserverRef.current.disconnect()
+        previewObserverRef.current = null
+      }
+    }
+  }, [])
 
   useEffect(() => {
     onUpdate(localSet)
@@ -770,8 +795,8 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                 {' · '}{localSet.cards.length} card{localSet.cards.length !== 1 ? 's' : ''}
               </CardDescription>
             </CardHeader>
-            <CardContent className="overflow-x-auto bg-muted/30 rounded-b-xl p-6">
-              <div className="space-y-8 min-w-min flex flex-col items-center">
+            <CardContent className="overflow-hidden bg-gradient-to-br from-slate-200 via-slate-100 to-blue-50 rounded-b-xl p-6">
+              <div ref={previewContainerRef} className="space-y-8 flex flex-col items-center">
                 {pages.map((pageCards, pageIndex) => {
                   const isDoubleSidedPreview =
                     localSet.cardType === 'double-sided' &&
@@ -797,76 +822,96 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                       })()
                     : null
 
-                  const previewPageStyle = {
+                  const naturalWidth = layout.pageWidth * 0.5
+                  const naturalHeight = layout.pageHeight * 0.5
+                  const previewScale = previewContainerWidth > 0
+                    ? Math.min(1, previewContainerWidth / naturalWidth)
+                    : 1
+
+                  const previewPageShadow = 'bg-white rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.06),0_8px_32px_rgba(0,0,0,0.12),0_0_0_1px_rgba(0,0,0,0.05)]'
+
+                  const innerPageStyle = {
                     padding: `${layout.marginTop * 0.5}px ${layout.marginRight * 0.5}px ${layout.marginBottom * 0.5}px ${layout.marginLeft * 0.5}px`,
-                    width: `${layout.pageWidth * 0.5}px`,
-                    height: `${layout.pageHeight * 0.5}px`,
-                    maxWidth: '90vw',
+                    width: `${naturalWidth}px`,
+                    height: `${naturalHeight}px`,
                     boxSizing: 'border-box' as const,
+                    transform: `scale(${previewScale})`,
+                    transformOrigin: 'top left',
+                  }
+
+                  const scaledWrapperStyle = {
+                    width: `${naturalWidth * previewScale}px`,
+                    height: `${naturalHeight * previewScale}px`,
+                    overflow: 'hidden' as const,
+                    flexShrink: 0,
                   }
 
                   return (
                     <div key={pageIndex} className="flex flex-col items-center gap-2">
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                      <div className="inline-flex items-center gap-1.5 bg-primary/10 text-primary rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide">
                         Page {pageIndex + 1} — Front
-                      </p>
-                      <div
-                        className="bg-white rounded shadow-[0_4px_24px_rgba(0,0,0,0.18)] border border-gray-200"
-                        style={previewPageStyle}
-                      >
+                      </div>
+                      <div style={scaledWrapperStyle}>
                         <div
-                          className="grid w-full h-full"
-                          style={{
-                            gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
-                            gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
-                            gap: `${layout.gapY * 0.5}px ${layout.gapX * 0.5}px`,
-                          }}
+                          className={previewPageShadow}
+                          style={innerPageStyle}
                         >
-                          {pageCards.map((card, cardIndex) => (
-                            <FlashCardDisplay
-                              key={card.id}
-                              card={card}
-                              settings={localSet.printSettings}
-                              cardWidth={layout.cardWidth * 0.5}
-                              cardHeight={layout.cardHeight * 0.5}
-                              cardNumber={pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1}
-                              showSetTitle={localSet.title}
-                            />
-                          ))}
+                          <div
+                            className="grid w-full h-full"
+                            style={{
+                              gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
+                              gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
+                              gap: `${layout.gapY * 0.5}px ${layout.gapX * 0.5}px`,
+                            }}
+                          >
+                            {pageCards.map((card, cardIndex) => (
+                              <FlashCardDisplay
+                                key={card.id}
+                                card={card}
+                                settings={localSet.printSettings}
+                                cardWidth={layout.cardWidth * 0.5}
+                                cardHeight={layout.cardHeight * 0.5}
+                                cardNumber={pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1}
+                                showSetTitle={localSet.title}
+                              />
+                            ))}
+                          </div>
                         </div>
                       </div>
 
                       {isDoubleSidedPreview && backPageCardsPreview && (
                         <>
-                          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mt-4">
+                          <div className="inline-flex items-center gap-1.5 bg-primary/10 text-primary rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide mt-4">
                             Page {pageIndex + 1} — Back
-                          </p>
-                          <div
-                            className="bg-white rounded shadow-[0_4px_24px_rgba(0,0,0,0.18)] border border-gray-200"
-                            style={previewPageStyle}
-                          >
+                          </div>
+                          <div style={scaledWrapperStyle}>
                             <div
-                              className="grid w-full h-full"
-                              style={{
-                                gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
-                                gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
-                                gap: `${layout.gapY * 0.5}px ${layout.gapX * 0.5}px`,
-                              }}
+                              className={previewPageShadow}
+                              style={innerPageStyle}
                             >
-                              {backPageCardsPreview.map((card, cardIndex) =>
-                                card ? (
-                                  <FlashCardDisplay
-                                    key={`back-${card.id}`}
-                                    card={card}
-                                    settings={localSet.printSettings}
-                                    cardWidth={layout.cardWidth * 0.5}
-                                    cardHeight={layout.cardHeight * 0.5}
-                                    side="back"
-                                  />
-                                ) : (
-                                  <div key={`empty-${cardIndex}`} />
-                                ),
-                              )}
+                              <div
+                                className="grid w-full h-full"
+                                style={{
+                                  gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
+                                  gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
+                                  gap: `${layout.gapY * 0.5}px ${layout.gapX * 0.5}px`,
+                                }}
+                              >
+                                {backPageCardsPreview.map((card, cardIndex) =>
+                                  card ? (
+                                    <FlashCardDisplay
+                                      key={`back-${card.id}`}
+                                      card={card}
+                                      settings={localSet.printSettings}
+                                      cardWidth={layout.cardWidth * 0.5}
+                                      cardHeight={layout.cardHeight * 0.5}
+                                      side="back"
+                                    />
+                                  ) : (
+                                    <div key={`empty-${cardIndex}`} />
+                                  ),
+                                )}
+                              </div>
                             </div>
                           </div>
                         </>
