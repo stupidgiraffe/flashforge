@@ -1,4 +1,3 @@
-
 import type { FlashCard, PrintSettings } from '@/lib/types'
 import { calculateFontSize } from '@/lib/print-utils'
 import { cn } from '@/lib/utils'
@@ -68,7 +67,7 @@ export function FlashCardDisplay({
         'relative overflow-hidden flex flex-col shadow-md',
         themeClasses,
         borderClass,
-        roundedClass
+        roundedClass,
       )}
       style={{
         width: printMode ? '100%' : `${cardWidth}px`,
@@ -98,7 +97,7 @@ export function FlashCardDisplay({
 
       {showSetTitle && settings.showSetTitle && (
         <div
-          className="absolute top-3 right-3 text-xs font-semibold opacity-40 max-w[60%] truncate z-10"
+          className="absolute top-3 right-3 text-xs font-semibold opacity-40 max-w-[60%] truncate z-10"
           style={{ color: settings.mainColor }}
         >
           {showSetTitle}
@@ -139,7 +138,7 @@ export function FlashCardDisplay({
               'font-bold break-words hyphens-auto w-full text-balance',
               settings.textAlignment === 'left' && 'text-left',
               settings.textAlignment === 'center' && 'text-center',
-              settings.textAlignment === 'right' && 'text-right'
+              settings.textAlignment === 'right' && 'text-right',
             )}
             style={{
               fontSize: `${fontSize}px`,
@@ -154,11 +153,11 @@ export function FlashCardDisplay({
 
         {secondary && (
           <div
-            className={cn((
+            className={cn(
               'mt-3 break-words w-full text-pretty',
               settings.textAlignment === 'left' && 'text-left',
               settings.textAlignment === 'center' && 'text-center',
-              settings.textAlignment === 'right' && 'text-right'
+              settings.textAlignment === 'right' && 'text-right',
             )}
             style={{
               fontSize: `${secondaryFontSize}px`,

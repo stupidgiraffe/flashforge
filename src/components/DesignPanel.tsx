@@ -1,4 +1,3 @@
-
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -61,10 +60,7 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="paper-size">Paper Size</Label>
-              <Select
-                value={settings.paperSize}
-                onValueChange={(value: PaperSize) => onUpdate({ paperSize: value })}
-              >
+              <Select value={settings.paperSize} onValueChange={(value: PaperSize) => onUpdate({ paperSize: value })}>
                 <SelectTrigger id="paper-size">
                   <SelectValue />
                 </SelectTrigger>
@@ -77,10 +73,7 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: 
 
             <div className="space-y-2">
               <Label htmlFor="orientation">Orientation</Label>
-              <Select
-                value={settings.orientation}
-                onValueChange={(value: Orientation) => onUpdate({ orientation: value })}
-              >
+              <Select value={settings.orientation} onValueChange={(value: Orientation) => onUpdate({ orientation: value })}>
                 <SelectTrigger id="orientation">
                   <SelectValue />
                 </SelectTrigger>
@@ -99,11 +92,9 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: 
                 <button
                   key={type}
                   onClick={() => onUpdateCardType(type)}
-                  className={p-4 rounded-lg border-2 text-left transition-all hover:shadow-md ${
-                    cardType === type
-                      ? 'border-primary bg-primary/5'
-                      : 'border-border hover:border-primary/50'
-                  }}
+                  className={`p-4 rounded-lg border-2 text-left transition-all hover:shadow-md ${
+                    cardType === type ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'
+                  }`}
                 >
                   <div className="font-semibold text-sm mb-1 capitalize">{type.replace('-', ' ')}</div>
                   <div className="text-xs text-muted-foreground">
@@ -121,11 +112,15 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: 
                 <button
                   key={count}
                   onClick={() => onUpdate({ cardsPerPage: count })}
-                  className={` - $0 }
+                  className={`p-3 rounded-lg border-2 text-center font-semibold transition-all hover:shadow-md ${
+                    settings.cardsPerPage === count
+                      ? 'border-primary bg-primary/5 text-primary'
+                      : 'border-border hover:border-primary/50'
+                  }`}
                 >
                   {count}
                 </button>
-              ))
+              ))}
             </div>
           </div>
         </CardContent>
@@ -147,7 +142,9 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: 
                 <button
                   key={theme.value}
                   onClick={() => onUpdate({ theme: theme.value })}
-                  className={pp-4 }
+                  className={`p-4 rounded-lg border-2 text-left transition-all hover:shadow-md ${
+                    settings.theme === theme.value ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'
+                  }`}
                 >
                   <div className="font-semibold text-sm mb-1">{theme.label}</div>
                   <div className="text-xs text-muted-foreground">{theme.description}</div>
@@ -163,7 +160,9 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: 
                 <button
                   key={scheme.name}
                   onClick={() => onUpdate({ mainColor: scheme.main, accentColor: scheme.accent })}
-                  className="p-3 rounded-lg border-2 flex items-center gap-3 transition-all hover:shadow-md"
+                  className={`p-3 rounded-lg border-2 flex items-center gap-3 transition-all hover:shadow-md ${
+                    settings.mainColor === scheme.main ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'
+                  }`}
                 >
                   <div className="flex gap-1">
                     <div className="w-6 h-6 rounded" style={{ backgroundColor: scheme.main }} />
@@ -179,15 +178,37 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: 
             <div className="space-y-2">
               <Label htmlFor="main-color">Custom Main Color</Label>
               <div className="flex gap-2">
-                <Input id="main-color" type="color" value={settings.mainColor} onChange={(e) => onUpdate({ mainColor: e.target.value })} className="w-16 h-10 p-1 cursor-pointer" />
-                <Input type="text" value={settings.mainColor} onChange={(e) => onUpdate({ mainColor: e.target.value })} className="flex-1 font-mono text-sm" />
+                <Input
+                  id="main-color"
+                  type="color"
+                  value={settings.mainColor}
+                  onChange={(e) => onUpdate({ mainColor: e.target.value })}
+                  className="w-16 h-10 p-1 cursor-pointer"
+                />
+                <Input
+                  type="text"
+                  value={settings.mainColor}
+                  onChange={(e) => onUpdate({ mainColor: e.target.value })}
+                  className="flex-1 font-mono text-sm"
+                />
               </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="accent-color">Custom Accent Color</Label>
               <div className="flex gap-2">
-                <Input id="accent-color" type="color" value={settings.accentColor} onChange={(e) => onUpdate({ accentColor: e.target.value })} className="w-16 h-10 p-1 cursor-pointer" />
-                <Input type="text" value={settings.accentColor} onChange={(e) => onUpdate({ accentColor: e.target.value })} className="flex-1 font-mono text-sm" />
+                <Input
+                  id="accent-color"
+                  type="color"
+                  value={settings.accentColor}
+                  onChange={(e) => onUpdate({ accentColor: e.target.value })}
+                  className="w-16 h-10 p-1 cursor-pointer"
+                />
+                <Input
+                  type="text"
+                  value={settings.accentColor}
+                  onChange={(e) => onUpdate({ accentColor: e.target.value })}
+                  className="flex-1 font-mono text-sm"
+                />
               </div>
             </div>
           </div>
@@ -203,8 +224,16 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: 
           <div className="space-y-2">
             <Label htmlFor="font-family">Font Family</Label>
             <Select value={settings.fontFamily} onValueChange={(value) => onUpdate({ fontFamily: value })}>
-              <SelectTrigger id="font-family"><SelectValue /></SelectTrigger>
-              <SelectContent>{FONT_FAMILIES.map((font) => <SelectItem key={font.value} value={font.value}>{font.label}</SelectItem>)}</SelectContent>
+              <SelectTrigger id="font-family">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {FONT_FAMILIES.map((font) => (
+                  <SelectItem key={font.value} value={font.value}>
+                    {font.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
             </Select>
           </div>
 
@@ -217,7 +246,13 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: 
             <Label>Text Alignment</Label>
             <div className="flex gap-2">
               {(['left', 'center', 'right'] as const).map((align) => (
-                <button key={align} onClick={() => onUpdate({ textAlignment: align })} className="flex-1 p-3 rounded-lg border-2 flex items-center justify-center transition-all">
+                <button
+                  key={align}
+                  onClick={() => onUpdate({ textAlignment: align })}
+                  className={`flex-1 p-3 rounded-lg border-2 flex items-center justify-center transition-all ${
+                    settings.textAlignment === align ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'
+                  }`}
+                >
                   {align === 'left' && <TextAlignLeft weight="bold" />}
                   {align === 'center' && <TextAlignCenter weight="bold" />}
                   {align === 'right' && <TextAlignRight weight="bold" />}
@@ -236,38 +271,68 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: 
         <CardContent className="space-y-6 pt-6">
           <div className="space-y-4">
             <SettingSwitch id="show-border" label="Show Border" description="Add border around cards" checked={settings.showBorder} onCheckedChange={(checked) => onUpdate({ showBorder: checked })} />
-            {settings.showBorder && (<div className="space-y-2 pl-4 border-l-2 border-primary/20"><Label>Border Thickness: {settings.borderThickness}px</Label><Slider value={[settings.borderThickness]} onValueChange={([value]) => onUpdate({ borderThickness: value })} min={1} max={8} step={1} className="py-4" /></div>)}
+            {settings.showBorder && (
+              <div className="space-y-2 pl-4 border-l-2 border-primary/20">
+                <Label>Border Thickness: {settings.borderThickness}px</Label>
+                <Slider value={[settings.borderThickness]} onValueChange={([value]) => onUpdate({ borderThickness: value })} min={1} max={8} step={1} className="py-4" />
+              </div>
+            )}
             <SettingSwitch id="show-rounded" label="Rounded Corners" description="Make card corners rounded" checked={settings.showRoundedCorners} onCheckedChange={(checked) => onUpdate({ showRoundedCorners: checked })} />
-            {settings.showRoundedCorners && (<div className="space-y-2 pl-4 border-l-2 border-primary/20"><Label>Corner Radius: {settings.cornerRadius}px</Label><Slider value={[settings.cornerRadius]} onValueChange={([value]) => onUpdate({ cornerRadius: value })} min={0} max={24} step={2} className="py-4" /></div>)}
+            {settings.showRoundedCorners && (
+              <div className="space-y-2 pl-4 border-l-2 border-primary/20">
+                <Label>Corner Radius: {settings.cornerRadius}px</Label>
+                <Slider value={[settings.cornerRadius]} onValueChange={([value]) => onUpdate({ cornerRadius: value })} min={0} max={24} step={2} className="py-4" />
+              </div>
+            )}
             <SettingSwitch id="show-numbering" label="Card Numbering" description="Show number on each card" checked={settings.showNumbering} onCheckedChange={(checked) => onUpdate({ showNumbering: checked })} />
             <SettingSwitch id="show-set-title" label="Set Title on Cards" description="Display set name on each card" checked={settings.showSetTitle} onCheckedChange={(checked) => onUpdate({ showSetTitle: checked })} />
           </div>
-          <div className="space-y-2"><Label htmlFor="footer-text">Footer Text (optional)</Label><Input id="footer-text" value={settings.footerText || ''} onChange={(e) => onUpdate({ footerText: e.target.value })} placeholder="e.g., Teacher Name, Class Period" /></div>
+          <div className="space-y-2">
+            <Label htmlFor="footer-text">Footer Text (optional)</Label>
+            <Input id="footer-text" value={settings.footerText || ''} onChange={(e) => onUpdate({ footerText: e.target.value })} placeholder="e.g., Teacher Name, Class Period" />
+          </div>
         </CardContent>
       </Card>
 
       <Card className="border-2">
         <CardHeader className="bg-muted/30">
-          <CardTitle className="flex items-center gap-2"><ArrowsCounterClockwise className="w-5 h-5" weight="duotone" />Double-Sided Printing</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <ArrowsCounterClockwise className="w-5 h-5" weight="duotone" />
+            Double-Sided Printing
+          </CardTitle>
           <CardDescription>Configure duplex printing alignment</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4 pt-6">
           <div className="space-y-2">
             <Label htmlFor="duplex-mode">Duplex Mode</Label>
             <Select value={settings.duplexMode || 'long-edge'} onValueChange={(value: DuplexMode) => onUpdate({ duplexMode: value })}>
-              <SelectTrigger id="duplex-mode"><SelectValue /></SelectTrigger>
+              <SelectTrigger id="duplex-mode">
+                <SelectValue />
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="long-edge">Long-Edge Flip (standard portrait)</SelectItem>
                 <SelectItem value="short-edge">Short-Edge Flip (landscape / flip-up)</SelectItem>
                 <SelectItem value="manual">Manual (front pages only)</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">{settings.duplexMode === 'manual' ? 'Only front sides will be printed. Back sides must be printed separately.' : settings.duplexMode === 'short-edge' ? 'Use for landscape orientation or flip-up binding. Cards are mirrored vertically.' : 'Standard duplex for portrait pages. Cards are mirrored horizontally after flipping.'}</p>
+            <p className="text-xs text-muted-foreground">
+              {settings.duplexMode === 'manual'
+                ? 'Only front sides will be printed. Back sides must be printed separately.'
+                : settings.duplexMode === 'short-edge'
+                  ? 'Use for landscape orientation or flip-up binding. Cards are mirrored vertically.'
+                  : 'Standard duplex for portrait pages. Cards are mirrored horizontally after flipping.'}
+            </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-2"><Label>Horizontal Print Offset: {settings.horizontalOffset}px</Label><Slider value={[settings.horizontalOffset]} onValueChange={([value]) => onUpdate({ horizontalOffset: value })} min={-24} max={24} step={1} /></div>
-            <div className="space-y-2"><Label>Vertical Print Offset: {settings.verticalOffset}px</Label><Slider value={[settings.verticalOffset]} onValueChange={([value]) => onUpdate({ verticalOffset: value })} min={-24} max={24} step={1} /></div>
+            <div className="space-y-2">
+              <Label>Horizontal Print Offset: {settings.horizontalOffset}px</Label>
+              <Slider value={[settings.horizontalOffset]} onValueChange={([value]) => onUpdate({ horizontalOffset: value })} min={-24} max={24} step={1} />
+            </div>
+            <div className="space-y-2">
+              <Label>Vertical Print Offset: {settings.verticalOffset}px</Label>
+              <Slider value={[settings.verticalOffset]} onValueChange={([value]) => onUpdate({ verticalOffset: value })} min={-24} max={24} step={1} />
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -281,7 +346,9 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: 
           <div className="space-y-2">
             <Label htmlFor="image-fit">Image Fit</Label>
             <Select value={settings.imageFit} onValueChange={(value: PrintSettings['imageFit']) => onUpdate({ imageFit: value })}>
-              <SelectTrigger id="image-fit"><SelectValue /></SelectTrigger>
+              <SelectTrigger id="image-fit">
+                <SelectValue />
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="cover">Cover (fill space)</SelectItem>
                 <SelectItem value="contain">Contain (fit within)</SelectItem>
