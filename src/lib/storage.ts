@@ -1,7 +1,8 @@
-import type { FlashCardSet } from './types'
+import type { FlashCard, FlashCardSet, PrintSettings, TestSettings } from './types'
+import { DEFAULT_PRINT_SETTINGS, DEFAULT_TEST_SETTINGS } from './types'
 
 const STORAGE_KEY = 'flashforge_sets'
-const VERSION = '1.0'
+const VERSION = '1.1'
 
 export interface StorageData {
   version: string
@@ -9,18 +10,72 @@ export interface StorageData {
   lastModified: number
 }
 
+function normalizeCard(card: Partial<FlashCard>, index = 0): FlashCard {
+  return {
+    id: card.id || `card-${Date.now()}-${index}`,
+    frontText: typeof card.frontText === 'string' ? card.frontText : '',
+    backText: typeof card.backText === 'string' ? card.backText : '',
+    frontSecondary: typeof card.frontSecondary === 'string' ? card.frontSecondary : undefined,
+    backSecondary: typeof card.backSecondary === 'string' ? card.backSecondary : undefined,
+    frontImageUrl: typeof card.frontImageUrl === 'string' ? card.frontImageUrl : undefined,
+    backImageUrl: typeof card.backImageUrl === 'string' ? card.backImageUrl : undefined,
+    imageUrl: typeof card.imageUrl === 'string' ? card.imageUrl : undefined,
+    imagePosition: card.imagePosition === 'back' || card.imagePosition === 'both' ? card.imagePosition : 'front',
+    frontImageScale: typeof card.frontImageScale === 'number' ? card.frontImageScale : 1,
+    backImageScale: typeof card.backImageScale === 'number' ? card.backImageScale : 1,
+    imageScale: typeof card.imageScale === 'number' ? card.imageScale : 1,
+    tags: Array.isArray(card.tags) ? card.tags.filter((tag): tag is string => typeof tag === 'string') : undefined,
+    category: typeof card.category === 'string' ? card.category : undefined,
+  }
+}
+
+function normalizePrintSettings(settings?: Partial<PrintSettings>): PrintSettings {
+  return {
+    ...DEFAULT_PRINT_SETTINGS,
+    ...settings,
+    horizontalOffset: typeof settings?.horizontalOffset === 'number' ? settings.horizontalOffset : 0,
+    verticalOffset: typeof settings?.verticalOffset === 'number' ? settings.verticalOffset : 0,
+    footerText: typeof settings?.footerText === 'string' ? settings.footerText : undefined,
+  }
+}
+
+function normalizeTestSettings(settings?: Partial<TestSettings>): TestSettings {
+  return {
+    ...DEFAULT_TEST_SETTINGS,
+    ...settings,
+    questionTypes: Array.isArray(settings?.questionTypes) && settings!.questionTypes.length > 0
+      ? settings!.questionTypes
+      : DEFAULT_TEST_SETTINGS.questionTypes,
+  }
+}
+
+export function normalizeSet(raw: Partial<FlashCardSet>, index = 0): FlashCardSet {
+  const now = Date.now()
+  return {
+    id: raw.id || generateUniqueId(),
+    title: typeof raw.title === 'string' && raw.title.trim() ? raw.title : `Imported Set ${index + 1}`,
+    subtitle: typeof raw.subtitle === 'string' ? raw.subtitle : undefined,
+    className: typeof raw.className === 'string' ? raw.className : undefined,
+    notes: typeof raw.notes === 'string' ? raw.notes : undefined,
+    cards: Array.isArray(raw.cards) ? raw.cards.map((card, cardIndex) => normalizeCard(card, cardIndex)) : [],
+    cardType: raw.cardType === 'double-sided' ? 'double-sided' : 'single-sided',
+    printSettings: normalizePrintSettings(raw.printSettings),
+    testSettings: normalizeTestSettings(raw.testSettings),
+    createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : now,
+    updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : now,
+  }
+}
+
 export function loadSets(): FlashCardSet[] {
   try {
     const data = localStorage.getItem(STORAGE_KEY)
     if (!data) return []
-    
-    const parsed: StorageData = JSON.parse(data)
-    
-    if (parsed.version !== VERSION) {
-      console.warn('Storage version mismatch, migrating...')
-    }
-    
-    return parsed.sets || []
+
+    const parsed = JSON.parse(data) as Partial<StorageData> | FlashCardSet[]
+    const rawSets = Array.isArray(parsed) ? parsed : parsed.sets
+    if (!Array.isArray(rawSets)) return []
+
+    return rawSets.map((set, index) => normalizeSet(set, index))
   } catch (error) {
     console.error('Failed to load sets:', error)
     return []
@@ -31,7 +86,7 @@ export function saveSets(sets: FlashCardSet[]): void {
   try {
     const data: StorageData = {
       version: VERSION,
-      sets,
+      sets: sets.map((set, index) => normalizeSet(set, index)),
       lastModified: Date.now(),
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
@@ -43,59 +98,64 @@ export function saveSets(sets: FlashCardSet[]): void {
 
 export function saveSet(set: FlashCardSet): void {
   const sets = loadSets()
-  const index = sets.findIndex(s => s.id === set.id)
-  
+  const normalized = normalizeSet(set)
+  const index = sets.findIndex((current) => current.id === normalized.id)
+
   if (index >= 0) {
-    sets[index] = { ...set, updatedAt: Date.now() }
+    sets[index] = { ...normalized, updatedAt: Date.now() }
   } else {
-    sets.push(set)
+    sets.push(normalized)
   }
-  
+
   saveSets(sets)
 }
 
 export function deleteSet(id: string): void {
-  const sets = loadSets().filter(s => s.id !== id)
+  const sets = loadSets().filter((set) => set.id !== id)
   saveSets(sets)
 }
 
 export function exportSetToJSON(set: FlashCardSet): string {
-  return JSON.stringify(set, null, 2)
+  return JSON.stringify(normalizeSet(set), null, 2)
 }
 
 export function importSetFromJSON(json: string): FlashCardSet {
-  const set = JSON.parse(json) as FlashCardSet
-  set.id = generateUniqueId()
-  set.createdAt = Date.now()
-  set.updatedAt = Date.now()
-  return set
+  const parsed = JSON.parse(json) as Partial<FlashCardSet>
+  return normalizeSet({
+    ...parsed,
+    id: generateUniqueId(),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  })
 }
 
 export function exportAllSetsToJSON(sets: FlashCardSet[]): string {
   const data: StorageData = {
     version: VERSION,
-    sets,
+    sets: sets.map((set, index) => normalizeSet(set, index)),
     lastModified: Date.now(),
   }
   return JSON.stringify(data, null, 2)
 }
 
 export function importAllSetsFromJSON(json: string): FlashCardSet[] {
-  const parsed = JSON.parse(json)
-  const rawSets: FlashCardSet[] = parsed.sets ?? (Array.isArray(parsed) ? parsed : [])
-  return rawSets.map((set) => ({
-    ...set,
-    id: generateUniqueId(),
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  }))
+  const parsed = JSON.parse(json) as Partial<StorageData> | Partial<FlashCardSet>[]
+  const rawSets = Array.isArray(parsed) ? parsed : parsed.sets ?? []
+  return rawSets.map((set, index) =>
+    normalizeSet({
+      ...set,
+      id: generateUniqueId(),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }, index),
+  )
 }
 
 export function generateUniqueId(): string {
   return `set-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 }
 
-export function compressImage(dataUrl: string, maxWidth = 1200, quality = 0.8): Promise<string> {
+export function compressImage(dataUrl: string, maxWidth = 1600, quality = 0.86): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new Image()
     img.onload = () => {
@@ -117,6 +177,8 @@ export function compressImage(dataUrl: string, maxWidth = 1200, quality = 0.8): 
         return
       }
 
+      ctx.imageSmoothingEnabled = true
+      ctx.imageSmoothingQuality = 'high'
       ctx.drawImage(img, 0, 0, width, height)
       resolve(canvas.toDataURL('image/jpeg', quality))
     }

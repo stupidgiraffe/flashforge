@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Slider } from '@/components/ui/slider'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast, Toaster } from 'sonner'
@@ -18,7 +19,7 @@ import { TestDisplay, AnswerKey } from '@/components/TestDisplay'
 import { TestConfigDialog } from '@/components/TestConfigDialog'
 import { DesignPanel } from '@/components/DesignPanel'
 import { generateTestQuestions } from '@/lib/test-utils'
-import { calculatePrintLayout, paginateCards, calculateBackPagePositions } from '@/lib/print-utils'
+import { calculatePrintLayout, paginateCardsFixedLength, calculateBackPagePositions } from '@/lib/print-utils'
 
 function App() {
   const [sets, setSets] = useState<FlashCardSet[]>([])
@@ -420,7 +421,6 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
     previewObserverRef.current = ro
   }
 
-  // Ensure the ResizeObserver is disconnected when the component unmounts
   useEffect(() => {
     return () => {
       if (previewObserverRef.current) {
@@ -431,8 +431,12 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
   }, [])
 
   useEffect(() => {
+    setLocalSet(set)
+  }, [set])
+
+  useEffect(() => {
     onUpdate(localSet)
-  }, [localSet])
+  }, [localSet, onUpdate])
 
   function addCard() {
     const newCard: FlashCard = {
@@ -440,6 +444,9 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
       frontText: '',
       backText: '',
       imagePosition: 'front',
+      frontImageScale: 1,
+      backImageScale: 1,
+      imageScale: 1,
     }
     setLocalSet({
       ...localSet,
@@ -478,11 +485,11 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
         const dataUrl = e.target?.result as string
         const compressed = await compressImage(dataUrl)
         if (side === 'front') {
-          updateCard(cardId, { frontImageUrl: compressed })
+          updateCard(cardId, { frontImageUrl: compressed, frontImageScale: 1 })
         } else if (side === 'back') {
-          updateCard(cardId, { backImageUrl: compressed })
+          updateCard(cardId, { backImageUrl: compressed, backImageScale: 1 })
         } else {
-          updateCard(cardId, { imageUrl: compressed, imagePosition: 'both' })
+          updateCard(cardId, { imageUrl: compressed, imagePosition: 'both', imageScale: 1 })
         }
         toast.success('Image uploaded!')
       } catch (error) {
@@ -495,11 +502,11 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
 
   function removeImage(cardId: string, side: 'front' | 'back' | 'both') {
     if (side === 'front') {
-      updateCard(cardId, { frontImageUrl: undefined })
+      updateCard(cardId, { frontImageUrl: undefined, frontImageScale: 1 })
     } else if (side === 'back') {
-      updateCard(cardId, { backImageUrl: undefined })
+      updateCard(cardId, { backImageUrl: undefined, backImageScale: 1 })
     } else {
-      updateCard(cardId, { imageUrl: undefined, imagePosition: 'front' })
+      updateCard(cardId, { imageUrl: undefined, imagePosition: 'front', imageScale: 1 })
     }
     toast.success('Image removed')
   }
@@ -538,7 +545,7 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
     localSet.printSettings.paperSize,
     localSet.printSettings.orientation
   )
-  const pages = paginateCards(localSet.cards, localSet.printSettings.cardsPerPage)
+  const pages = paginateCardsFixedLength(localSet.cards, localSet.printSettings.cardsPerPage)
 
   return (
     <div className="space-y-8">
@@ -656,21 +663,37 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                         </div>
 
                         {card.frontImageUrl ? (
-                          <div className="relative group rounded-lg overflow-hidden border-2 border-border">
-                            <img 
-                              src={card.frontImageUrl} 
-                              alt="Front" 
-                              className="w-full h-48 object-cover"
-                            />
-                            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={() => fileInputRefs.current[`${card.id}-front`]?.click()}
-                              >
-                                <ImageIcon className="mr-2" weight="bold" />
-                                Change
-                              </Button>
+                          <div className="space-y-3">
+                            <div className="relative group rounded-lg overflow-hidden border-2 border-border bg-muted/20">
+                              <img 
+                                src={card.frontImageUrl} 
+                                alt="Front" 
+                                className="w-full h-48 object-contain bg-white"
+                                style={{ transform: `scale(${card.frontImageScale ?? 1})`, transformOrigin: 'center center' }}
+                              />
+                              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={() => fileInputRefs.current[`${card.id}-front`]?.click()}
+                                >
+                                  <ImageIcon className="mr-2" weight="bold" />
+                                  Change
+                                </Button>
+                              </div>
+                            </div>
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                <span>Front image zoom</span>
+                                <span>{Math.round((card.frontImageScale ?? 1) * 100)}%</span>
+                              </div>
+                              <Slider
+                                value={[card.frontImageScale ?? 1]}
+                                onValueChange={([value]) => updateCard(card.id, { frontImageScale: value })}
+                                min={0.6}
+                                max={1.8}
+                                step={0.05}
+                              />
                             </div>
                           </div>
                         ) : (
@@ -716,21 +739,37 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                         </div>
 
                         {card.backImageUrl ? (
-                          <div className="relative group rounded-lg overflow-hidden border-2 border-border">
-                            <img 
-                              src={card.backImageUrl} 
-                              alt="Back" 
-                              className="w-full h-48 object-cover"
-                            />
-                            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={() => fileInputRefs.current[`${card.id}-back`]?.click()}
-                              >
-                                <ImageIcon className="mr-2" weight="bold" />
-                                Change
-                              </Button>
+                          <div className="space-y-3">
+                            <div className="relative group rounded-lg overflow-hidden border-2 border-border bg-muted/20">
+                              <img 
+                                src={card.backImageUrl} 
+                                alt="Back" 
+                                className="w-full h-48 object-contain bg-white"
+                                style={{ transform: `scale(${card.backImageScale ?? 1})`, transformOrigin: 'center center' }}
+                              />
+                              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={() => fileInputRefs.current[`${card.id}-back`]?.click()}
+                                >
+                                  <ImageIcon className="mr-2" weight="bold" />
+                                  Change
+                                </Button>
+                              </div>
+                            </div>
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                <span>Back image zoom</span>
+                                <span>{Math.round((card.backImageScale ?? 1) * 100)}%</span>
+                              </div>
+                              <Slider
+                                value={[card.backImageScale ?? 1]}
+                                onValueChange={([value]) => updateCard(card.id, { backImageScale: value })}
+                                min={0.6}
+                                max={1.8}
+                                step={0.05}
+                              />
                             </div>
                           </div>
                         ) : (
@@ -811,14 +850,7 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                           duplexMode,
                           localSet.printSettings.orientation,
                         )
-                        const paddedPage: (typeof pageCards[0] | null)[] = Array.from(
-                          { length: localSet.printSettings.cardsPerPage },
-                          () => null,
-                        )
-                        pageCards.forEach((card, i) => {
-                          paddedPage[i] = card
-                        })
-                        return backPositions.map((pos) => paddedPage[pos])
+                        return backPositions.map((pos) => pageCards[pos])
                       })()
                     : null
 
@@ -866,12 +898,12 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                           >
                             {pageCards.map((card, cardIndex) => (
                               <FlashCardDisplay
-                                key={card.id}
+                                key={card?.id ?? `empty-front-${pageIndex}-${cardIndex}`}
                                 card={card}
                                 settings={localSet.printSettings}
                                 cardWidth={layout.cardWidth * 0.5}
                                 cardHeight={layout.cardHeight * 0.5}
-                                cardNumber={pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1}
+                                cardNumber={card ? pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1 : undefined}
                                 showSetTitle={localSet.title}
                               />
                             ))}
@@ -897,20 +929,16 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                                   gap: `${layout.gapY * 0.5}px ${layout.gapX * 0.5}px`,
                                 }}
                               >
-                                {backPageCardsPreview.map((card, cardIndex) =>
-                                  card ? (
-                                    <FlashCardDisplay
-                                      key={`back-${card.id}`}
-                                      card={card}
-                                      settings={localSet.printSettings}
-                                      cardWidth={layout.cardWidth * 0.5}
-                                      cardHeight={layout.cardHeight * 0.5}
-                                      side="back"
-                                    />
-                                  ) : (
-                                    <div key={`empty-${cardIndex}`} />
-                                  ),
-                                )}
+                                {backPageCardsPreview.map((card, cardIndex) => (
+                                  <FlashCardDisplay
+                                    key={card?.id ? `back-${card.id}` : `empty-back-${pageIndex}-${cardIndex}`}
+                                    card={card}
+                                    settings={localSet.printSettings}
+                                    cardWidth={layout.cardWidth * 0.5}
+                                    cardHeight={layout.cardHeight * 0.5}
+                                    side="back"
+                                  />
+                                ))}
                               </div>
                             </div>
                           </div>
@@ -989,7 +1017,6 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                   localSet.printSettings.duplexMode &&
                   localSet.printSettings.duplexMode !== 'manual'
 
-                // Build back page cards (mirrored for duplex alignment)
                 const backPageCards = isDoubleSided
                   ? (() => {
                       const duplexMode = localSet.printSettings.duplexMode as 'long-edge' | 'short-edge'
@@ -998,15 +1025,12 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                         duplexMode,
                         localSet.printSettings.orientation,
                       )
-                      const paddedPage: (typeof pageCards[0] | null)[] = Array.from({ length: localSet.printSettings.cardsPerPage }, () => null)
-                      pageCards.forEach((card, i) => { paddedPage[i] = card })
-                      return backPositions.map((pos) => paddedPage[pos])
+                      return backPositions.map((pos) => pageCards[pos])
                     })()
                   : null
 
                 return (
                   <div key={pageIndex}>
-                    {/* Front page */}
                     <div
                       className="avoid-break"
                       style={{
@@ -1017,6 +1041,8 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                           ? (localSet.printSettings.orientation === 'landscape' ? '210mm' : '297mm')
                           : (localSet.printSettings.orientation === 'landscape' ? '8.5in' : '11in'),
                         padding: `${layout.marginTop}px ${layout.marginRight}px ${layout.marginBottom}px ${layout.marginLeft}px`,
+                        transform: `translate(${localSet.printSettings.horizontalOffset}px, ${localSet.printSettings.verticalOffset}px)`,
+                        transformOrigin: 'top left',
                         pageBreakAfter: 'always',
                         breakAfter: 'page',
                         boxSizing: 'border-box',
@@ -1035,12 +1061,12 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                       >
                         {pageCards.map((card, cardIndex) => (
                           <FlashCardDisplay
-                            key={card.id}
+                            key={card?.id ?? `print-empty-front-${pageIndex}-${cardIndex}`}
                             card={card}
                             settings={localSet.printSettings}
                             cardWidth={layout.cardWidth}
                             cardHeight={layout.cardHeight}
-                            cardNumber={pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1}
+                            cardNumber={card ? pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1 : undefined}
                             showSetTitle={localSet.title}
                             printMode={true}
                           />
@@ -1048,7 +1074,6 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                       </div>
                     </div>
 
-                    {/* Back page (duplex only) */}
                     {isDoubleSided && backPageCards && (
                       <div
                         className="avoid-break"
@@ -1060,6 +1085,8 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                             ? (localSet.printSettings.orientation === 'landscape' ? '210mm' : '297mm')
                             : (localSet.printSettings.orientation === 'landscape' ? '8.5in' : '11in'),
                           padding: `${layout.marginTop}px ${layout.marginRight}px ${layout.marginBottom}px ${layout.marginLeft}px`,
+                          transform: `translate(${localSet.printSettings.horizontalOffset}px, ${localSet.printSettings.verticalOffset}px)`,
+                          transformOrigin: 'top left',
                           pageBreakAfter: isLastPage ? 'auto' : 'always',
                           breakAfter: isLastPage ? 'auto' : 'page',
                           boxSizing: 'border-box',
@@ -1076,21 +1103,17 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                             height: '100%',
                           }}
                         >
-                          {backPageCards.map((card, cardIndex) =>
-                            card ? (
-                              <FlashCardDisplay
-                                key={`back-${card.id}`}
-                                card={card}
-                                settings={localSet.printSettings}
-                                cardWidth={layout.cardWidth}
-                                cardHeight={layout.cardHeight}
-                                side="back"
-                                printMode={true}
-                              />
-                            ) : (
-                              <div key={`empty-${cardIndex}`} />
-                            ),
-                          )}
+                          {backPageCards.map((card, cardIndex) => (
+                            <FlashCardDisplay
+                              key={card?.id ? `back-${card.id}` : `print-empty-back-${pageIndex}-${cardIndex}`}
+                              card={card}
+                              settings={localSet.printSettings}
+                              cardWidth={layout.cardWidth}
+                              cardHeight={layout.cardHeight}
+                              side="back"
+                              printMode={true}
+                            />
+                          ))}
                         </div>
                       </div>
                     )}
