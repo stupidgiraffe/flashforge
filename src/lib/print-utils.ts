@@ -1,3 +1,4 @@
+
 import type { CardsPerPage, PaperSize, Orientation, PrintLayout } from './types'
 
 const INCH_TO_PX = 96
@@ -15,8 +16,6 @@ export const PAPER_SIZES = {
 }
 
 const SAFE_MARGIN = 0.5 * INCH_TO_PX
-
-// Standard index card aspect ratio (width : height = 3 : 2)
 const TARGET_ASPECT_RATIO = 3 / 2
 
 export function calculatePrintLayout(
@@ -32,34 +31,31 @@ export function calculatePrintLayout(
   }
 
   const { rows, cols } = getRowsCols(cardsPerPage)
-
   const availableWidth = pageWidth - SAFE_MARGIN * 2
   const availableHeight = pageHeight - SAFE_MARGIN * 2
 
-  const gapX = 12
-  const gapY = 12
+  const gapX = cardsPerPage <= 2 ? 16 : 12
+  const gapY = cardsPerPage <= 2 ? 16 : 12
 
   const maxCardWidth = (availableWidth - gapX * (cols - 1)) / cols
   const maxCardHeight = (availableHeight - gapY * (rows - 1)) / rows
 
-  // Constrain card dimensions to maintain a consistent aspect ratio
   let cardWidth: number
   let cardHeight: number
+
   if (maxCardWidth / maxCardHeight > TARGET_ASPECT_RATIO) {
-    // Height is the binding constraint
     cardHeight = maxCardHeight
     cardWidth = cardHeight * TARGET_ASPECT_RATIO
   } else {
-    // Width is the binding constraint
     cardWidth = maxCardWidth
     cardHeight = cardWidth / TARGET_ASPECT_RATIO
   }
 
-  // Center the grid within the available area by distributing extra space as margin
   const gridWidth = cardWidth * cols + gapX * (cols - 1)
   const gridHeight = cardHeight * rows + gapY * (rows - 1)
-  const extraH = availableWidth - gridWidth
-  const extraV = availableHeight - gridHeight
+  const extraH = Math.max(0, availableWidth - gridWidth)
+  const extraV = Math.max(0, availableHeight - gridHeight)
+
   const marginLeft = SAFE_MARGIN + extraH / 2
   const marginRight = SAFE_MARGIN + extraH / 2
   const marginTop = SAFE_MARGIN + extraV / 2
@@ -145,19 +141,25 @@ export function paginateCards<T>(cards: T[], cardsPerPage: number): T[][] {
   return pages
 }
 
+export function paginateCardsFixedLength<T>(cards: T[], cardsPerPage: number): (T | null)[][] {
+  const pages = paginateCards(cards, cardsPerPage)
+  return pages.map((page) => Array.from({ length: cardsPerPage }, (_, index) => page[index] ?? null))
+}
+
 export function calculateFontSize(
   baseSize: number,
   cardsPerPage: CardsPerPage,
   textLength: number
 ): number {
-  const scaleFactor = cardsPerPage <= 2 ? 1.5 : cardsPerPage <= 4 ? 1.2 : cardsPerPage <= 6 ? 1 : 0.85
-
+  const scaleFactor = cardsPerPage <= 2 ? 1.45 : cardsPerPage <= 4 ? 1.15 : cardsPerPage <= 6 ? 1 : 0.85
   let adjustedSize = baseSize * scaleFactor
 
-  if (textLength > 30) {
-    adjustedSize *= 0.85
-  } else if (textLength > 20) {
-    adjustedSize *= 0.95
+  if (textLength > 60) {
+    adjustedSize *= 0.72
+  } else if (textLength > 40) {
+    adjustedSize *= 0.82
+  } else if (textLength > 24) {
+    adjustedSize *= 0.92
   }
 
   return Math.max(adjustedSize, 10)

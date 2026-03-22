@@ -8,6 +8,9 @@ export interface FlashCard {
   backImageUrl?: string
   imageUrl?: string
   imagePosition?: 'front' | 'back' | 'both'
+  frontImageScale?: number
+  backImageScale?: number
+  imageScale?: number
   tags?: string[]
   category?: string
 }
@@ -62,6 +65,9 @@ export type CardTheme =
   | 'picture-focus'
   | 'ink-saver'
   | 'quiz-card'
+  | 'playful-pop'
+  | 'teacher-pro'
+  | 'calm-study'
 
 export interface PrintSettings {
   cardsPerPage: CardsPerPage
@@ -146,7 +152,7 @@ export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
   singleSidedStyle: 'image-word',
   doubleSidedStyle: 'picture-word',
   duplexMode: 'long-edge',
-  theme: 'minimal',
+  theme: 'teacher-pro',
   showCropMarks: false,
   showCutLines: true,
   showBorder: true,
@@ -161,7 +167,7 @@ export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
   mainColor: '#1e293b',
   accentColor: '#0ea5e9',
   borderThickness: 1,
-  cornerRadius: 8,
+  cornerRadius: 10,
   textAlignment: 'center',
   horizontalOffset: 0,
   verticalOffset: 0,

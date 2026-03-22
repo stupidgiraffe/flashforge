@@ -86,11 +86,12 @@
     size: auto;
   }
   
-  body {
+  html, body {
     margin: 0;
     padding: 0;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+    background: white !important;
   }
   
   .no-print {
@@ -121,12 +122,7 @@
     text-shadow: none !important;
   }
   
-  /* Hide the React root; the print-only portal (direct child of body) remains visible */
   #root {
     display: none !important;
-  }
-  
-  .print-only {
-    display: block !important;
   }
 }
