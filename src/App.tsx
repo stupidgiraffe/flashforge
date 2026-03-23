@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Printer, DownloadSimple, UploadSimple, Exam, Image as ImageIcon, Trash, ArrowLeft, DotsThreeVertical } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
@@ -171,6 +171,12 @@ function App() {
     }
     window.print()
   }
+
+  const handleUpdateSet = useCallback((updated: FlashCardSet) => {
+    saveSet(updated)
+    setSets(prev => prev.map(s => s.id === updated.id ? updated : s))
+    setCurrentSet(updated)
+  }, [])
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted">
@@ -382,11 +388,7 @@ function App() {
           <SetEditor
             set={currentSet}
             onBack={() => setCurrentSet(null)}
-            onUpdate={(updated) => {
-              saveSet(updated)
-              setSets(sets.map(s => s.id === updated.id ? updated : s))
-              setCurrentSet(updated)
-            }}
+            onUpdate={handleUpdateSet}
           />
         )}
       </main>
@@ -401,7 +403,6 @@ interface SetEditorProps {
 }
 
 function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
-  const [localSet, setLocalSet] = useState(set)
   const [showTestDialog, setShowTestDialog] = useState(false)
   const [generatedTest, setGeneratedTest] = useState<ReturnType<typeof generateTestQuestions> | null>(null)
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
@@ -430,13 +431,16 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
     }
   }, [])
 
-  useEffect(() => {
-    setLocalSet(set)
-  }, [set])
-
-  useEffect(() => {
-    onUpdate(localSet)
-  }, [localSet, onUpdate])
+  const updateSet = useCallback(
+    (recipe: Partial<FlashCardSet> | ((prev: FlashCardSet) => FlashCardSet)) => {
+      if (typeof recipe === 'function') {
+        onUpdate(recipe(set))
+      } else {
+        onUpdate({ ...set, ...recipe })
+      }
+    },
+    [set, onUpdate]
+  )
 
   function addCard() {
     const newCard: FlashCard = {
@@ -448,24 +452,24 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
       backImageScale: 1,
       imageScale: 1,
     }
-    setLocalSet({
-      ...localSet,
-      cards: [...localSet.cards, newCard],
-    })
+    updateSet(prev => ({
+      ...prev,
+      cards: [...prev.cards, newCard],
+    }))
   }
 
   function updateCard(id: string, updates: Partial<FlashCard>) {
-    setLocalSet({
-      ...localSet,
-      cards: localSet.cards.map(c => c.id === id ? { ...c, ...updates } : c),
-    })
+    updateSet(prev => ({
+      ...prev,
+      cards: prev.cards.map(c => c.id === id ? { ...c, ...updates } : c),
+    }))
   }
 
   function deleteCard(id: string) {
-    setLocalSet({
-      ...localSet,
-      cards: localSet.cards.filter(c => c.id !== id),
-    })
+    updateSet(prev => ({
+      ...prev,
+      cards: prev.cards.filter(c => c.id !== id),
+    }))
   }
 
   async function handleImageUpload(cardId: string, file: File, side: 'front' | 'back' | 'both') {
@@ -512,40 +516,40 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
   }
 
   function handleGenerateTest() {
-    if (localSet.cards.length === 0) {
+    if (set.cards.length === 0) {
       toast.error('Add some cards first!')
       return
     }
-    const questions = generateTestQuestions(localSet.cards, localSet.testSettings)
+    const questions = generateTestQuestions(set.cards, set.testSettings)
     setGeneratedTest(questions)
     toast.success('Test generated!')
   }
 
-  function handleTestSettingsChange(newSettings: typeof localSet.testSettings) {
-    setLocalSet({
-      ...localSet,
+  function handleTestSettingsChange(newSettings: typeof set.testSettings) {
+    updateSet(prev => ({
+      ...prev,
       testSettings: newSettings,
-    })
+    }))
   }
 
   function handleExportSet() {
-    const json = exportSetToJSON(localSet)
+    const json = exportSetToJSON(set)
     const blob = new Blob([json], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${localSet.title.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.json`
+    a.download = `${set.title.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.json`
     a.click()
     URL.revokeObjectURL(url)
     toast.success('Set exported!')
   }
 
   const layout = calculatePrintLayout(
-    localSet.printSettings.cardsPerPage,
-    localSet.printSettings.paperSize,
-    localSet.printSettings.orientation
+    set.printSettings.cardsPerPage,
+    set.printSettings.paperSize,
+    set.printSettings.orientation
   )
-  const pages = paginateCardsFixedLength(localSet.cards, localSet.printSettings.cardsPerPage)
+  const pages = paginateCardsFixedLength(set.cards, set.printSettings.cardsPerPage)
 
   return (
     <div className="space-y-8">
@@ -555,8 +559,8 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
             <ArrowLeft className="mr-2" weight="bold" />
             Back to Sets
           </Button>
-          <h2 className="text-3xl font-bold">{localSet.title}</h2>
-          {localSet.subtitle && <p className="text-muted-foreground mt-1">{localSet.subtitle}</p>}
+          <h2 className="text-3xl font-bold">{set.title}</h2>
+          {set.subtitle && <p className="text-muted-foreground mt-1">{set.subtitle}</p>}
         </div>
         <Button variant="outline" onClick={handleExportSet} className="shadow-md">
           <DownloadSimple className="mr-2" weight="bold" />
@@ -569,7 +573,7 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
       </div>
 
       <div className="flex items-center gap-3 mb-6 no-print">
-        <Button variant="outline" onClick={() => setShowTestDialog(true)} disabled={localSet.cards.length === 0} className="shadow-sm">
+        <Button variant="outline" onClick={() => setShowTestDialog(true)} disabled={set.cards.length === 0} className="shadow-sm">
           <Exam className="mr-2" weight="bold" />
           Generate Test
         </Button>
@@ -578,10 +582,10 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
       <TestConfigDialog
         open={showTestDialog}
         onOpenChange={setShowTestDialog}
-        settings={localSet.testSettings}
+        settings={set.testSettings}
         onSettingsChange={handleTestSettingsChange}
         onGenerate={handleGenerateTest}
-        maxQuestions={localSet.cards.length}
+        maxQuestions={set.cards.length}
       />
 
       <Tabs defaultValue="editor" className="no-print">
@@ -593,7 +597,7 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
         </TabsList>
 
         <TabsContent value="editor" className="space-y-6 mt-6">
-          {localSet.cards.length === 0 ? (
+          {set.cards.length === 0 ? (
             <Card className="shadow-lg">
               <CardContent className="py-16 text-center">
                 <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-6">
@@ -608,7 +612,7 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
               </CardContent>
             </Card>
           ) : (
-            localSet.cards.map((card, index) => (
+            set.cards.map((card, index) => (
               <Card key={card.id} className="shadow-md border-2 hover:border-primary/30 transition-colors">
                 <CardHeader className="bg-muted/30">
                   <div className="flex items-center justify-between">
@@ -808,16 +812,16 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
 
         <TabsContent value="design" className="space-y-6 mt-6">
           <DesignPanel
-            settings={localSet.printSettings}
-            cardType={localSet.cardType}
+            settings={set.printSettings}
+            cardType={set.cardType}
             onUpdate={(updates) => {
-              setLocalSet({
-                ...localSet,
-                printSettings: { ...localSet.printSettings, ...updates },
-              })
+              updateSet(prev => ({
+                ...prev,
+                printSettings: { ...prev.printSettings, ...updates },
+              }))
             }}
             onUpdateCardType={(cardType) => {
-              setLocalSet({ ...localSet, cardType })
+              updateSet(prev => ({ ...prev, cardType }))
             }}
           />
         </TabsContent>
@@ -828,27 +832,27 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
               <CardTitle className="text-2xl">Print Preview</CardTitle>
               <CardDescription className="text-base">
                 {pages.length} page{pages.length !== 1 ? 's' : ''}
-                {localSet.cardType === 'double-sided' && localSet.printSettings.duplexMode !== 'manual'
+                {set.cardType === 'double-sided' && set.printSettings.duplexMode !== 'manual'
                   ? ` front + ${pages.length} back`
                   : ''}
-                {' · '}{localSet.cards.length} card{localSet.cards.length !== 1 ? 's' : ''}
+                {' · '}{set.cards.length} card{set.cards.length !== 1 ? 's' : ''}
               </CardDescription>
             </CardHeader>
             <CardContent className="overflow-hidden bg-gradient-to-br from-slate-200 via-slate-100 to-blue-50 rounded-b-xl p-6">
               <div ref={previewContainerRef} className="space-y-8 flex flex-col items-center">
                 {pages.map((pageCards, pageIndex) => {
                   const isDoubleSidedPreview =
-                    localSet.cardType === 'double-sided' &&
-                    localSet.printSettings.duplexMode &&
-                    localSet.printSettings.duplexMode !== 'manual'
+                    set.cardType === 'double-sided' &&
+                    set.printSettings.duplexMode &&
+                    set.printSettings.duplexMode !== 'manual'
 
                   const backPageCardsPreview = isDoubleSidedPreview
                     ? (() => {
-                        const duplexMode = localSet.printSettings.duplexMode as 'long-edge' | 'short-edge'
+                        const duplexMode = set.printSettings.duplexMode as 'long-edge' | 'short-edge'
                         const backPositions = calculateBackPagePositions(
-                          localSet.printSettings.cardsPerPage,
+                          set.printSettings.cardsPerPage,
                           duplexMode,
-                          localSet.printSettings.orientation,
+                          set.printSettings.orientation,
                         )
                         return backPositions.map((pos) => pageCards[pos])
                       })()
@@ -900,11 +904,11 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                               <FlashCardDisplay
                                 key={card?.id ?? `empty-front-${pageIndex}-${cardIndex}`}
                                 card={card}
-                                settings={localSet.printSettings}
+                                settings={set.printSettings}
                                 cardWidth={layout.cardWidth * 0.5}
                                 cardHeight={layout.cardHeight * 0.5}
-                                cardNumber={card ? pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1 : undefined}
-                                showSetTitle={localSet.title}
+                                cardNumber={card ? pageIndex * set.printSettings.cardsPerPage + cardIndex + 1 : undefined}
+                                showSetTitle={set.title}
                               />
                             ))}
                           </div>
@@ -933,7 +937,7 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                                   <FlashCardDisplay
                                     key={card?.id ? `back-${card.id}` : `empty-back-${pageIndex}-${cardIndex}`}
                                     card={card}
-                                    settings={localSet.printSettings}
+                                    settings={set.printSettings}
                                     cardWidth={layout.cardWidth * 0.5}
                                     cardHeight={layout.cardHeight * 0.5}
                                     side="back"
@@ -959,7 +963,7 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                 <CardTitle className="text-2xl">Test Preview</CardTitle>
                 <CardDescription className="text-base">
                   {generatedTest.length} question{generatedTest.length !== 1 ? 's' : ''}
-                  {localSet.testSettings.includeAnswerKey && ' · Includes answer key'}
+                  {set.testSettings.includeAnswerKey && ' · Includes answer key'}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -967,16 +971,16 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                   <div className="border-2 rounded-xl overflow-hidden shadow-md">
                     <TestDisplay
                       questions={generatedTest}
-                      settings={localSet.testSettings}
+                      settings={set.testSettings}
                       showAnswers={false}
                     />
                   </div>
                   
-                  {localSet.testSettings.includeAnswerKey && (
+                  {set.testSettings.includeAnswerKey && (
                     <div className="border-2 rounded-xl overflow-hidden shadow-md">
                       <AnswerKey
                         questions={generatedTest}
-                        settings={localSet.testSettings}
+                        settings={set.testSettings}
                       />
                     </div>
                   )}
@@ -994,16 +998,16 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
               <div className="page-break-after">
                 <TestDisplay
                   questions={generatedTest}
-                  settings={localSet.testSettings}
+                  settings={set.testSettings}
                   showAnswers={false}
                 />
               </div>
 
-              {localSet.testSettings.includeAnswerKey && (
+              {set.testSettings.includeAnswerKey && (
                 <div>
                   <AnswerKey
                     questions={generatedTest}
-                    settings={localSet.testSettings}
+                    settings={set.testSettings}
                   />
                 </div>
               )}
@@ -1013,17 +1017,17 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
               {pages.map((pageCards, pageIndex) => {
                 const isLastPage = pageIndex === pages.length - 1
                 const isDoubleSided =
-                  localSet.cardType === 'double-sided' &&
-                  localSet.printSettings.duplexMode &&
-                  localSet.printSettings.duplexMode !== 'manual'
+                  set.cardType === 'double-sided' &&
+                  set.printSettings.duplexMode &&
+                  set.printSettings.duplexMode !== 'manual'
 
                 const backPageCards = isDoubleSided
                   ? (() => {
-                      const duplexMode = localSet.printSettings.duplexMode as 'long-edge' | 'short-edge'
+                      const duplexMode = set.printSettings.duplexMode as 'long-edge' | 'short-edge'
                       const backPositions = calculateBackPagePositions(
-                        localSet.printSettings.cardsPerPage,
+                        set.printSettings.cardsPerPage,
                         duplexMode,
-                        localSet.printSettings.orientation,
+                        set.printSettings.orientation,
                       )
                       return backPositions.map((pos) => pageCards[pos])
                     })()
@@ -1034,14 +1038,14 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                     <div
                       className="avoid-break"
                       style={{
-                        width: localSet.printSettings.paperSize === 'a4'
-                          ? (localSet.printSettings.orientation === 'landscape' ? '297mm' : '210mm')
-                          : (localSet.printSettings.orientation === 'landscape' ? '11in' : '8.5in'),
-                        height: localSet.printSettings.paperSize === 'a4'
-                          ? (localSet.printSettings.orientation === 'landscape' ? '210mm' : '297mm')
-                          : (localSet.printSettings.orientation === 'landscape' ? '8.5in' : '11in'),
+                        width: set.printSettings.paperSize === 'a4'
+                          ? (set.printSettings.orientation === 'landscape' ? '297mm' : '210mm')
+                          : (set.printSettings.orientation === 'landscape' ? '11in' : '8.5in'),
+                        height: set.printSettings.paperSize === 'a4'
+                          ? (set.printSettings.orientation === 'landscape' ? '210mm' : '297mm')
+                          : (set.printSettings.orientation === 'landscape' ? '8.5in' : '11in'),
                         padding: `${layout.marginTop}px ${layout.marginRight}px ${layout.marginBottom}px ${layout.marginLeft}px`,
-                        transform: `translate(${localSet.printSettings.horizontalOffset}px, ${localSet.printSettings.verticalOffset}px)`,
+                        transform: `translate(${set.printSettings.horizontalOffset}px, ${set.printSettings.verticalOffset}px)`,
                         transformOrigin: 'top left',
                         pageBreakAfter: 'always',
                         breakAfter: 'page',
@@ -1063,11 +1067,11 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                           <FlashCardDisplay
                             key={card?.id ?? `print-empty-front-${pageIndex}-${cardIndex}`}
                             card={card}
-                            settings={localSet.printSettings}
+                            settings={set.printSettings}
                             cardWidth={layout.cardWidth}
                             cardHeight={layout.cardHeight}
-                            cardNumber={card ? pageIndex * localSet.printSettings.cardsPerPage + cardIndex + 1 : undefined}
-                            showSetTitle={localSet.title}
+                            cardNumber={card ? pageIndex * set.printSettings.cardsPerPage + cardIndex + 1 : undefined}
+                            showSetTitle={set.title}
                             printMode={true}
                           />
                         ))}
@@ -1078,14 +1082,14 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                       <div
                         className="avoid-break"
                         style={{
-                          width: localSet.printSettings.paperSize === 'a4'
-                            ? (localSet.printSettings.orientation === 'landscape' ? '297mm' : '210mm')
-                            : (localSet.printSettings.orientation === 'landscape' ? '11in' : '8.5in'),
-                          height: localSet.printSettings.paperSize === 'a4'
-                            ? (localSet.printSettings.orientation === 'landscape' ? '210mm' : '297mm')
-                            : (localSet.printSettings.orientation === 'landscape' ? '8.5in' : '11in'),
+                          width: set.printSettings.paperSize === 'a4'
+                            ? (set.printSettings.orientation === 'landscape' ? '297mm' : '210mm')
+                            : (set.printSettings.orientation === 'landscape' ? '11in' : '8.5in'),
+                          height: set.printSettings.paperSize === 'a4'
+                            ? (set.printSettings.orientation === 'landscape' ? '210mm' : '297mm')
+                            : (set.printSettings.orientation === 'landscape' ? '8.5in' : '11in'),
                           padding: `${layout.marginTop}px ${layout.marginRight}px ${layout.marginBottom}px ${layout.marginLeft}px`,
-                          transform: `translate(${localSet.printSettings.horizontalOffset}px, ${localSet.printSettings.verticalOffset}px)`,
+                          transform: `translate(${set.printSettings.horizontalOffset}px, ${set.printSettings.verticalOffset}px)`,
                           transformOrigin: 'top left',
                           pageBreakAfter: isLastPage ? 'auto' : 'always',
                           breakAfter: isLastPage ? 'auto' : 'page',
@@ -1107,7 +1111,7 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
                             <FlashCardDisplay
                               key={card?.id ? `back-${card.id}` : `print-empty-back-${pageIndex}-${cardIndex}`}
                               card={card}
-                              settings={localSet.printSettings}
+                              settings={set.printSettings}
                               cardWidth={layout.cardWidth}
                               cardHeight={layout.cardHeight}
                               side="back"
