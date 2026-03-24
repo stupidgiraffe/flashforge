@@ -357,6 +357,18 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: 
             </Select>
             <p className="text-xs text-muted-foreground">Center mode works best with the new per-card image zoom controls in the editor.</p>
           </div>
+          <div className="space-y-2">
+            <Label>Image Size Ratio: {Math.round(settings.imageHeightRatio * 100)}%</Label>
+            <Slider
+              value={[settings.imageHeightRatio]}
+              onValueChange={([value]) => onUpdate({ imageHeightRatio: value })}
+              min={0.2}
+              max={0.8}
+              step={0.05}
+              className="py-4"
+            />
+            <p className="text-xs text-muted-foreground">Controls how much vertical space images take vs. text. Lower values leave more room for text.</p>
+          </div>
         </CardContent>
       </Card>
     </div>

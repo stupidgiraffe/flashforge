@@ -101,6 +101,8 @@ export interface PrintSettings {
   horizontalOffset: number
   verticalOffset: number
   
+  imageHeightRatio: number
+
   footerText?: string
 }
 
@@ -171,6 +173,7 @@ export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
   textAlignment: 'center',
   horizontalOffset: 0,
   verticalOffset: 0,
+  imageHeightRatio: 0.4,
 }
 
 export const DEFAULT_TEST_SETTINGS: TestSettings = {
