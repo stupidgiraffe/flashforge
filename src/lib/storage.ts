@@ -3,6 +3,8 @@ import { DEFAULT_PRINT_SETTINGS, DEFAULT_TEST_SETTINGS } from './types'
 
 const STORAGE_KEY = 'flashforge_sets'
 const VERSION = '1.1'
+const MIN_IMAGE_HEIGHT_RATIO = 0.2
+const MAX_IMAGE_HEIGHT_RATIO = 0.8
 
 export interface StorageData {
   version: string
@@ -30,12 +32,17 @@ function normalizeCard(card: Partial<FlashCard>, index = 0): FlashCard {
 }
 
 function normalizePrintSettings(settings?: Partial<PrintSettings>): PrintSettings {
+  const imageHeightRatio = settings?.imageHeightRatio
+
   return {
     ...DEFAULT_PRINT_SETTINGS,
     ...settings,
     horizontalOffset: typeof settings?.horizontalOffset === 'number' ? settings.horizontalOffset : 0,
     verticalOffset: typeof settings?.verticalOffset === 'number' ? settings.verticalOffset : 0,
-    imageHeightRatio: typeof settings?.imageHeightRatio === 'number' ? settings.imageHeightRatio : DEFAULT_PRINT_SETTINGS.imageHeightRatio,
+    imageHeightRatio:
+      typeof imageHeightRatio === 'number' && Number.isFinite(imageHeightRatio)
+        ? Math.min(MAX_IMAGE_HEIGHT_RATIO, Math.max(MIN_IMAGE_HEIGHT_RATIO, imageHeightRatio))
+        : DEFAULT_PRINT_SETTINGS.imageHeightRatio,
     footerText: typeof settings?.footerText === 'string' ? settings.footerText : undefined,
   }
 }

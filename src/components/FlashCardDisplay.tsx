@@ -55,7 +55,8 @@ export function FlashCardDisplay({
   }
 
   const hasText = !!(text || secondary)
-  const fontSize = calculateFontSize(settings.fontSize, settings.cardsPerPage, text?.length || 0, !!imageUrl && hasText)
+  const textLength = (text?.length || 0) + (secondary?.length || 0)
+  const fontSize = calculateFontSize(settings.fontSize, settings.cardsPerPage, textLength, !!imageUrl && hasText)
   const secondaryFontSize = fontSize * 0.72
   const themeClasses = getThemeClasses(settings.theme)
   const borderClass = settings.showBorder ? 'border-2' : 'border-0'
@@ -86,14 +87,14 @@ export function FlashCardDisplay({
         borderRadius: settings.showRoundedCorners ? `${settings.cornerRadius}px` : 0,
       }}
     >
-      <div
-        className="absolute top-0 left-0 right-0 h-1"
-        style={{
-          backgroundColor: settings.accentColor,
-          opacity: 0.45,
-          borderRadius: settings.showRoundedCorners ? `${settings.cornerRadius}px ${settings.cornerRadius}px 0 0` : '0',
-        }}
-      />
+        <div
+          className="absolute top-0 left-0 right-0 h-1"
+          style={{
+            backgroundColor: settings.accentColor,
+            opacity: 0.45,
+            borderRadius: printMode || !settings.showRoundedCorners ? '0' : `${settings.cornerRadius}px ${settings.cornerRadius}px 0 0`,
+          }}
+        />
 
       {settings.showNumbering && cardNumber !== undefined && (
         <div

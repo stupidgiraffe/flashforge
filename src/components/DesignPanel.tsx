@@ -355,7 +355,7 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: 
                 <SelectItem value="center">Center (manual zoom friendly)</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">Center mode works best with the new per-card image zoom controls in the editor.</p>
+            <p className="text-xs text-muted-foreground">Per-card image zoom works in cover, contain, and center modes. Center still gives the most manual positioning control.</p>
           </div>
           <div className="space-y-2">
             <Label>Image Size Ratio: {Math.round(settings.imageHeightRatio * 100)}%</Label>
