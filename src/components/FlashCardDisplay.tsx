@@ -54,17 +54,26 @@ export function FlashCardDisplay({
     imageScale = card.backImageScale ?? card.imageScale ?? 1
   }
 
-  const fontSize = calculateFontSize(settings.fontSize, settings.cardsPerPage, text?.length || 0)
+  const hasText = !!(text || secondary)
+  const fontSize = calculateFontSize(settings.fontSize, settings.cardsPerPage, text?.length || 0, !!imageUrl && hasText)
   const secondaryFontSize = fontSize * 0.72
   const themeClasses = getThemeClasses(settings.theme)
   const borderClass = settings.showBorder ? 'border-2' : 'border-0'
   const roundedClass = settings.showRoundedCorners ? 'rounded-xl' : 'rounded-none'
-  const imageHeight = cardHeight * 0.56
+
+  // Dynamic image height: use the user-configured ratio, but if there's no text, allow more space.
+  // For cards with both image and text, cap at imageHeightRatio. For image-only cards, allow up to 80%.
+  const baseRatio = settings.imageHeightRatio
+  const effectiveRatio = hasText ? baseRatio : Math.max(baseRatio, 0.78)
+  const imageHeight = cardHeight * effectiveRatio
+
+  // Scale minHeight proportionally with card size so small cards (8+ per page) aren't dominated by images.
+  const minImageHeight = Math.min(imageHeight, settings.cardsPerPage >= 8 ? 60 : settings.cardsPerPage >= 6 ? 80 : 100)
 
   return (
     <div
       className={cn(
-        'relative overflow-hidden flex flex-col shadow-md',
+        'relative flex flex-col shadow-md overflow-hidden',
         themeClasses,
         borderClass,
         roundedClass,
@@ -104,14 +113,15 @@ export function FlashCardDisplay({
         </div>
       )}
 
-      <div className="flex-1 flex flex-col items-center justify-center p-6 gap-1">
+      <div className="flex-1 flex flex-col items-center justify-center p-6 gap-1 min-h-0">
         {imageUrl && (
           <div
-            className="mb-4 rounded-lg overflow-hidden flex-shrink-0 flex items-center justify-center bg-white/70"
+            className="mb-4 rounded-lg overflow-hidden flex items-center justify-center bg-white/70"
             style={{
               width: '100%',
               maxHeight: `${imageHeight}px`,
-              minHeight: `${Math.min(imageHeight, 140)}px`,
+              minHeight: `${minImageHeight}px`,
+              flexShrink: hasText ? 1 : 0,
             }}
           >
             <img
@@ -126,7 +136,7 @@ export function FlashCardDisplay({
                       ? 'none'
                       : 'cover',
                 objectPosition: 'center',
-                transform: settings.imageFit === 'center' ? `scale(${imageScale})` : undefined,
+                transform: imageScale !== 1 ? `scale(${imageScale})` : undefined,
               }}
             />
           </div>

@@ -35,6 +35,7 @@ function normalizePrintSettings(settings?: Partial<PrintSettings>): PrintSetting
     ...settings,
     horizontalOffset: typeof settings?.horizontalOffset === 'number' ? settings.horizontalOffset : 0,
     verticalOffset: typeof settings?.verticalOffset === 'number' ? settings.verticalOffset : 0,
+    imageHeightRatio: typeof settings?.imageHeightRatio === 'number' ? settings.imageHeightRatio : DEFAULT_PRINT_SETTINGS.imageHeightRatio,
     footerText: typeof settings?.footerText === 'string' ? settings.footerText : undefined,
   }
 }

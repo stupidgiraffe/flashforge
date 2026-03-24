@@ -149,10 +149,15 @@ export function paginateCardsFixedLength<T>(cards: T[], cardsPerPage: number): (
 export function calculateFontSize(
   baseSize: number,
   cardsPerPage: CardsPerPage,
-  textLength: number
+  textLength: number,
+  hasImage = false
 ): number {
   const scaleFactor = cardsPerPage <= 2 ? 1.45 : cardsPerPage <= 4 ? 1.15 : cardsPerPage <= 6 ? 1 : 0.85
   let adjustedSize = baseSize * scaleFactor
+
+  if (hasImage) {
+    adjustedSize *= cardsPerPage <= 4 ? 0.78 : 0.70
+  }
 
   if (textLength > 60) {
     adjustedSize *= 0.72
