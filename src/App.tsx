@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus, Printer, DownloadSimple, UploadSimple, Exam, Image as ImageIcon, Trash, ArrowLeft, DotsThreeVertical } from '@phosphor-icons/react'
+import { Plus, Printer, DownloadSimple, UploadSimple, Exam, Image as ImageIcon, Trash, ArrowLeft, DotsThreeVertical, Copy, Sparkle, Stack } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
@@ -10,16 +10,35 @@ import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import { toast, Toaster } from 'sonner'
 import type { FlashCardSet, FlashCard } from '@/lib/types'
 import { DEFAULT_PRINT_SETTINGS, DEFAULT_TEST_SETTINGS } from '@/lib/types'
-import { loadSets, saveSet, deleteSet, generateUniqueId, compressImage, exportSetToJSON, importSetFromJSON, exportAllSetsToJSON, importAllSetsFromJSON } from '@/lib/storage'
+import { loadSets, saveSet, deleteSet, generateUniqueId, compressImage, exportSetToJSON, importSetFromJSON, exportAllSetsToJSON, importAllSetsFromJSON, duplicateSet, getStorageStats } from '@/lib/storage'
 import { FlashCardDisplay } from '@/components/FlashCardDisplay'
-import { TestDisplay, AnswerKey } from '@/components/TestDisplay'
-import { TestConfigDialog } from '@/components/TestConfigDialog'
-import { DesignPanel } from '@/components/DesignPanel'
+import { StarterPackBrowser } from '@/components/StarterPackBrowser'
 import { generateTestQuestions } from '@/lib/test-utils'
 import { calculatePrintLayout, paginateCardsFixedLength, calculateBackPagePositions } from '@/lib/print-utils'
+import { createStarterSet } from '@/lib/starter-sets'
+
+const DesignPanel = lazy(() => import('@/components/DesignPanel').then((module) => ({ default: module.DesignPanel })))
+const TestConfigDialog = lazy(() => import('@/components/TestConfigDialog').then((module) => ({ default: module.TestConfigDialog })))
+const TestDisplay = lazy(() => import('@/components/TestDisplay').then((module) => ({ default: module.TestDisplay })))
+const AnswerKey = lazy(() => import('@/components/TestDisplay').then((module) => ({ default: module.AnswerKey })))
+
+function sortSetsByRecent(items: FlashCardSet[]): FlashCardSet[] {
+  return [...items].sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+function LazySectionFallback({ label }: { label: string }) {
+  return (
+    <Card className="shadow-md">
+      <CardContent className="py-12 text-center text-muted-foreground">
+        Loading {label}...
+      </CardContent>
+    </Card>
+  )
+}
 
 function App() {
   const [sets, setSets] = useState<FlashCardSet[]>([])
@@ -31,56 +50,8 @@ function App() {
 
   useEffect(() => {
     const loaded = loadSets()
-    setSets(loaded)
-    
-    if (loaded.length === 0) {
-      createDemoSet()
-    }
+    setSets(sortSetsByRecent(loaded))
   }, [])
-
-  function createDemoSet() {
-    const demoSet: FlashCardSet = {
-      id: generateUniqueId(),
-      title: 'Sample Vocabulary Set',
-      subtitle: 'Common English Words',
-      className: 'Grade 3',
-      cards: [
-        {
-          id: '1',
-          frontText: 'Apple',
-          backText: 'A round fruit',
-          imagePosition: 'front',
-        },
-        {
-          id: '2',
-          frontText: 'Book',
-          backText: 'Pages bound together',
-          imagePosition: 'front',
-        },
-        {
-          id: '3',
-          frontText: 'Cat',
-          backText: 'A small furry pet',
-          imagePosition: 'front',
-        },
-        {
-          id: '4',
-          frontText: 'Dog',
-          backText: 'A loyal animal',
-          imagePosition: 'front',
-        },
-      ],
-      cardType: 'double-sided',
-      printSettings: DEFAULT_PRINT_SETTINGS,
-      testSettings: DEFAULT_TEST_SETTINGS,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    }
-    
-    saveSet(demoSet)
-    setSets([demoSet])
-    toast.success('Demo set created!')
-  }
 
   function handleCreateSet() {
     if (!newSetTitle.trim()) {
@@ -100,7 +71,7 @@ function App() {
     }
 
     saveSet(newSet)
-    setSets([...sets, newSet])
+    setSets((prev) => sortSetsByRecent([newSet, ...prev]))
     setCurrentSet(newSet)
     setNewSetTitle('')
     setCreateDialogOpen(false)
@@ -109,11 +80,31 @@ function App() {
 
   function handleDeleteSet(id: string) {
     deleteSet(id)
-    setSets(sets.filter(s => s.id !== id))
+    setSets((prev) => sortSetsByRecent(prev.filter(s => s.id !== id)))
     if (currentSet?.id === id) {
       setCurrentSet(null)
     }
     toast.success('Set deleted')
+  }
+
+  function handleDuplicateSet(source: FlashCardSet) {
+    const copy = duplicateSet(source)
+    saveSet(copy)
+    setSets((prev) => sortSetsByRecent([copy, ...prev]))
+    toast.success(`Duplicated "${source.title}"`)
+  }
+
+  function handleCreateStarterSet(templateId: string) {
+    const starter = createStarterSet(templateId)
+    if (!starter) {
+      toast.error('Starter pack not found')
+      return
+    }
+
+    saveSet(starter)
+    setSets((prev) => sortSetsByRecent([starter, ...prev]))
+    setCurrentSet(starter)
+    toast.success(`Created "${starter.title}"`)
   }
 
   function handleImportSet(file: File) {
@@ -123,7 +114,7 @@ function App() {
         const json = e.target?.result as string
         const imported = importSetFromJSON(json)
         saveSet(imported)
-        setSets((prev) => [...prev, imported])
+        setSets((prev) => sortSetsByRecent([imported, ...prev]))
         toast.success(`Imported "${imported.title}"`)
       } catch {
         toast.error('Failed to import set. Make sure it is a valid FlashForge JSON file.')
@@ -139,7 +130,7 @@ function App() {
         const json = e.target?.result as string
         const imported = importAllSetsFromJSON(json)
         imported.forEach((s) => saveSet(s))
-        setSets((prev) => [...prev, ...imported])
+        setSets((prev) => sortSetsByRecent([...imported, ...prev]))
         toast.success(`Imported ${imported.length} set${imported.length !== 1 ? 's' : ''} from backup`)
       } catch {
         toast.error('Failed to import backup. Make sure it is a valid FlashForge backup file.')
@@ -174,9 +165,11 @@ function App() {
 
   const handleUpdateSet = useCallback((updated: FlashCardSet) => {
     saveSet(updated)
-    setSets(prev => prev.map(s => s.id === updated.id ? updated : s))
+    setSets(prev => sortSetsByRecent(prev.map(s => s.id === updated.id ? updated : s)))
     setCurrentSet(updated)
   }, [])
+
+  const storageStats = getStorageStats()
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted">
@@ -301,23 +294,65 @@ function App() {
               <p className="text-muted-foreground text-lg">Select a set to edit or create a new one to get started</p>
             </div>
 
-            {sets.length === 0 ? (
-              <Card className="max-w-md mx-auto shadow-lg border-2">
-                <CardContent className="flex flex-col items-center justify-center py-16">
-                  <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mb-6">
-                    <Plus className="w-10 h-10 text-primary" weight="bold" />
+            <div className="grid gap-4 md:grid-cols-3">
+              <Card className="shadow-sm">
+                <CardContent className="flex items-center gap-4 py-5">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                    <Stack className="h-6 w-6" weight="bold" />
                   </div>
-                  <p className="text-xl font-semibold text-foreground mb-2">No flashcard sets yet</p>
-                  <p className="text-muted-foreground mb-6">Create your first set to begin</p>
-                  <Button onClick={() => setCreateDialogOpen(true)} size="lg" className="shadow-md">
-                    <Plus className="mr-2" weight="bold" />
-                    Create Your First Set
-                  </Button>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Sets</p>
+                    <p className="text-2xl font-bold">{storageStats.setCount}</p>
+                  </div>
                 </CardContent>
               </Card>
+              <Card className="shadow-sm">
+                <CardContent className="flex items-center gap-4 py-5">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                    <Copy className="h-6 w-6" weight="bold" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Cards</p>
+                    <p className="text-2xl font-bold">{storageStats.cardCount}</p>
+                  </div>
+                </CardContent>
+              </Card>
+              <Card className="shadow-sm">
+                <CardContent className="flex items-center gap-4 py-5">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                    <Sparkle className="h-6 w-6" weight="fill" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Local storage used</p>
+                    <p className="text-2xl font-bold">{storageStats.kilobytesUsed} KB</p>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {sets.length === 0 ? (
+              <div className="space-y-6">
+                <Card className="max-w-md mx-auto shadow-lg border-2">
+                  <CardContent className="flex flex-col items-center justify-center py-16">
+                    <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mb-6">
+                      <Plus className="w-10 h-10 text-primary" weight="bold" />
+                    </div>
+                    <p className="text-xl font-semibold text-foreground mb-2">No flashcard sets yet</p>
+                    <p className="text-muted-foreground mb-6 text-center">Create a blank set or start from a polished teaching pack.</p>
+                    <div className="flex flex-col sm:flex-row gap-3">
+                      <Button onClick={() => setCreateDialogOpen(true)} size="lg" className="shadow-md">
+                        <Plus className="mr-2" weight="bold" />
+                        Create Blank Set
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+                <StarterPackBrowser onUseTemplate={handleCreateStarterSet} />
+              </div>
             ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {sets.map((set) => (
+              <div className="space-y-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {sets.map((set) => (
                   <Card
                     key={set.id}
                     className="cursor-pointer hover:shadow-xl transition-all duration-300 hover:-translate-y-1 border-2 hover:border-primary/50 group"
@@ -343,6 +378,15 @@ function App() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleDuplicateSet(set)
+                              }}
+                            >
+                              <Copy className="mr-2 w-4 h-4" weight="bold" />
+                              Duplicate Set
+                            </DropdownMenuItem>
                             <DropdownMenuItem
                               className="text-destructive focus:text-destructive"
                               onClick={(e) => {
@@ -380,7 +424,9 @@ function App() {
                       )}
                     </CardContent>
                   </Card>
-                ))}
+                  ))}
+                </div>
+                <StarterPackBrowser onUseTemplate={handleCreateStarterSet} />
               </div>
             )}
           </div>
@@ -389,6 +435,7 @@ function App() {
             set={currentSet}
             onBack={() => setCurrentSet(null)}
             onUpdate={handleUpdateSet}
+            onDuplicate={() => handleDuplicateSet(currentSet)}
           />
         )}
       </main>
@@ -400,9 +447,10 @@ interface SetEditorProps {
   set: FlashCardSet
   onBack: () => void
   onUpdate: (set: FlashCardSet) => void
+  onDuplicate: () => void
 }
 
-function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
+function SetEditor({ set, onBack, onUpdate, onDuplicate }: SetEditorProps) {
   const [showTestDialog, setShowTestDialog] = useState(false)
   const [generatedTest, setGeneratedTest] = useState<ReturnType<typeof generateTestQuestions> | null>(null)
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
@@ -566,6 +614,10 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
           <DownloadSimple className="mr-2" weight="bold" />
           Export Set
         </Button>
+        <Button variant="outline" onClick={onDuplicate} className="shadow-md">
+          <Copy className="mr-2" weight="bold" />
+          Duplicate Set
+        </Button>
         <Button onClick={addCard} size="lg" className="shadow-md">
           <Plus className="mr-2" weight="bold" />
           Add Card
@@ -579,14 +631,16 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
         </Button>
       </div>
 
-      <TestConfigDialog
-        open={showTestDialog}
-        onOpenChange={setShowTestDialog}
-        settings={set.testSettings}
-        onSettingsChange={handleTestSettingsChange}
-        onGenerate={handleGenerateTest}
-        maxQuestions={set.cards.length}
-      />
+      <Suspense fallback={null}>
+        <TestConfigDialog
+          open={showTestDialog}
+          onOpenChange={setShowTestDialog}
+          settings={set.testSettings}
+          onSettingsChange={handleTestSettingsChange}
+          onGenerate={handleGenerateTest}
+          maxQuestions={set.cards.length}
+        />
+      </Suspense>
 
       <Tabs defaultValue="editor" className="no-print">
         <TabsList className="grid w-full max-w-2xl grid-cols-4">
@@ -597,6 +651,48 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
         </TabsList>
 
         <TabsContent value="editor" className="space-y-6 mt-6">
+          <Card className="shadow-md border-2">
+            <CardHeader className="bg-muted/30">
+              <CardTitle className="text-xl font-bold">Set Details</CardTitle>
+              <CardDescription>Edit the set metadata that appears in the library and exports.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-6 pt-6 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label className="text-base font-semibold">Title</Label>
+                <Input
+                  value={set.title}
+                  onChange={(e) => updateSet(prev => ({ ...prev, title: e.target.value }))}
+                  placeholder="e.g., Grade 2 Introductions"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-base font-semibold">Subtitle</Label>
+                <Input
+                  value={set.subtitle ?? ''}
+                  onChange={(e) => updateSet(prev => ({ ...prev, subtitle: e.target.value || undefined }))}
+                  placeholder="Optional context for the set"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-base font-semibold">Class name</Label>
+                <Input
+                  value={set.className ?? ''}
+                  onChange={(e) => updateSet(prev => ({ ...prev, className: e.target.value || undefined }))}
+                  placeholder="e.g., Grade 3, Homeroom A"
+                />
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <Label className="text-base font-semibold">Teacher notes</Label>
+                <Textarea
+                  value={set.notes ?? ''}
+                  onChange={(e) => updateSet(prev => ({ ...prev, notes: e.target.value || undefined }))}
+                  placeholder="Private notes, sequence ideas, or usage reminders"
+                  rows={4}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
           {set.cards.length === 0 ? (
             <Card className="shadow-lg">
               <CardContent className="py-16 text-center">
@@ -811,19 +907,21 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
         </TabsContent>
 
         <TabsContent value="design" className="space-y-6 mt-6">
-          <DesignPanel
-            settings={set.printSettings}
-            cardType={set.cardType}
-            onUpdate={(updates) => {
-              updateSet(prev => ({
-                ...prev,
-                printSettings: { ...prev.printSettings, ...updates },
-              }))
-            }}
-            onUpdateCardType={(cardType) => {
-              updateSet(prev => ({ ...prev, cardType }))
-            }}
-          />
+          <Suspense fallback={<LazySectionFallback label="design controls" />}>
+            <DesignPanel
+              settings={set.printSettings}
+              cardType={set.cardType}
+              onUpdate={(updates) => {
+                updateSet(prev => ({
+                  ...prev,
+                  printSettings: { ...prev.printSettings, ...updates },
+                }))
+              }}
+              onUpdateCardType={(cardType) => {
+                updateSet(prev => ({ ...prev, cardType }))
+              }}
+            />
+          </Suspense>
         </TabsContent>
 
         <TabsContent value="preview" className="mt-6">
@@ -969,19 +1067,23 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
               <CardContent>
                 <div className="space-y-8">
                   <div className="border-2 rounded-xl overflow-hidden shadow-md">
-                    <TestDisplay
-                      questions={generatedTest}
-                      settings={set.testSettings}
-                      showAnswers={false}
-                    />
+                    <Suspense fallback={<LazySectionFallback label="test preview" />}>
+                      <TestDisplay
+                        questions={generatedTest}
+                        settings={set.testSettings}
+                        showAnswers={false}
+                      />
+                    </Suspense>
                   </div>
                   
                   {set.testSettings.includeAnswerKey && (
                     <div className="border-2 rounded-xl overflow-hidden shadow-md">
-                      <AnswerKey
-                        questions={generatedTest}
-                        settings={set.testSettings}
-                      />
+                      <Suspense fallback={<LazySectionFallback label="answer key" />}>
+                        <AnswerKey
+                          questions={generatedTest}
+                          settings={set.testSettings}
+                        />
+                      </Suspense>
                     </div>
                   )}
                 </div>
@@ -996,19 +1098,23 @@ function SetEditor({ set, onBack, onUpdate }: SetEditorProps) {
           {generatedTest ? (
             <>
               <div className="page-break-after">
-                <TestDisplay
-                  questions={generatedTest}
-                  settings={set.testSettings}
-                  showAnswers={false}
-                />
+                <Suspense fallback={null}>
+                  <TestDisplay
+                    questions={generatedTest}
+                    settings={set.testSettings}
+                    showAnswers={false}
+                  />
+                </Suspense>
               </div>
 
               {set.testSettings.includeAnswerKey && (
                 <div>
-                  <AnswerKey
-                    questions={generatedTest}
-                    settings={set.testSettings}
-                  />
+                  <Suspense fallback={null}>
+                    <AnswerKey
+                      questions={generatedTest}
+                      settings={set.testSettings}
+                    />
+                  </Suspense>
                 </div>
               )}
             </>

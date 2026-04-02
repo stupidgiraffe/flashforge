@@ -12,6 +12,13 @@ export interface StorageData {
   lastModified: number
 }
 
+export interface StorageStats {
+  setCount: number
+  cardCount: number
+  bytesUsed: number
+  kilobytesUsed: number
+}
+
 function normalizeCard(card: Partial<FlashCard>, index = 0): FlashCard {
   return {
     id: card.id || `card-${Date.now()}-${index}`,
@@ -104,6 +111,10 @@ export function saveSets(sets: FlashCardSet[]): void {
   }
 }
 
+export function replaceAllSets(sets: FlashCardSet[]): void {
+  saveSets(sets)
+}
+
 export function saveSet(set: FlashCardSet): void {
   const sets = loadSets()
   const normalized = normalizeSet(set)
@@ -121,6 +132,21 @@ export function saveSet(set: FlashCardSet): void {
 export function deleteSet(id: string): void {
   const sets = loadSets().filter((set) => set.id !== id)
   saveSets(sets)
+}
+
+export function duplicateSet(source: FlashCardSet): FlashCardSet {
+  const now = Date.now()
+  return normalizeSet({
+    ...source,
+    id: generateUniqueId(),
+    title: `${source.title} (Copy)`,
+    cards: source.cards.map((card, index) => normalizeCard({
+      ...card,
+      id: `card-${now}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+    }, index)),
+    createdAt: now,
+    updatedAt: now,
+  })
 }
 
 export function exportSetToJSON(set: FlashCardSet): string {
@@ -157,6 +183,19 @@ export function importAllSetsFromJSON(json: string): FlashCardSet[] {
       updatedAt: Date.now(),
     }, index),
   )
+}
+
+export function getStorageStats(): StorageStats {
+  const raw = localStorage.getItem(STORAGE_KEY) ?? ''
+  const sets = loadSets()
+  const cardCount = sets.reduce((total, set) => total + set.cards.length, 0)
+
+  return {
+    setCount: sets.length,
+    cardCount,
+    bytesUsed: raw.length,
+    kilobytesUsed: Math.round((raw.length / 1024) * 10) / 10,
+  }
 }
 
 export function generateUniqueId(): string {
