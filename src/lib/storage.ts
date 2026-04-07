@@ -4,12 +4,19 @@ import { DEFAULT_PRINT_SETTINGS, DEFAULT_TEST_SETTINGS } from './types'
 const STORAGE_KEY = 'flashforge_sets'
 const VERSION = '1.1'
 const MIN_IMAGE_HEIGHT_RATIO = 0.2
-const MAX_IMAGE_HEIGHT_RATIO = 0.8
+const MAX_IMAGE_HEIGHT_RATIO = 0.95
 
 export interface StorageData {
   version: string
   sets: FlashCardSet[]
   lastModified: number
+}
+
+export interface StorageStats {
+  setCount: number
+  cardCount: number
+  bytesUsed: number
+  kilobytesUsed: number
 }
 
 function normalizeCard(card: Partial<FlashCard>, index = 0): FlashCard {
@@ -161,6 +168,29 @@ export function importAllSetsFromJSON(json: string): FlashCardSet[] {
 
 export function generateUniqueId(): string {
   return `set-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+}
+
+export function duplicateSet(source: FlashCardSet): FlashCardSet {
+  const now = Date.now()
+  return normalizeSet({
+    ...source,
+    id: generateUniqueId(),
+    title: `${source.title} (Copy)`,
+    createdAt: now,
+    updatedAt: now,
+  })
+}
+
+export function getStorageStats(): StorageStats {
+  const sets = loadSets()
+  const raw = localStorage.getItem(STORAGE_KEY) ?? ''
+  const bytesUsed = new Blob([raw]).size
+  return {
+    setCount: sets.length,
+    cardCount: sets.reduce((sum, s) => sum + s.cards.length, 0),
+    bytesUsed,
+    kilobytesUsed: Math.round(bytesUsed / 1024),
+  }
 }
 
 export function compressImage(dataUrl: string, maxWidth = 1600, quality = 0.86): Promise<string> {

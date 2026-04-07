@@ -353,22 +353,29 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: 
                 <SelectItem value="cover">Cover (fill space)</SelectItem>
                 <SelectItem value="contain">Contain (fit within)</SelectItem>
                 <SelectItem value="center">Center (manual zoom friendly)</SelectItem>
+                <SelectItem value="background">Background (full card)</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">Per-card image zoom works in cover, contain, and center modes. Center still gives the most manual positioning control.</p>
+            <p className="text-xs text-muted-foreground">
+              {settings.imageFit === 'background'
+                ? 'Background mode fills the entire card with the image. Text overlays on a gradient for readability.'
+                : 'Per-card image zoom works in cover, contain, and center modes. Center still gives the most manual positioning control.'}
+            </p>
           </div>
-          <div className="space-y-2">
-            <Label>Image Size Ratio: {Math.round(settings.imageHeightRatio * 100)}%</Label>
-            <Slider
-              value={[settings.imageHeightRatio]}
-              onValueChange={([value]) => onUpdate({ imageHeightRatio: value })}
-              min={0.2}
-              max={0.8}
-              step={0.05}
-              className="py-4"
-            />
-            <p className="text-xs text-muted-foreground">Controls how much vertical space images take vs. text. Lower values leave more room for text.</p>
-          </div>
+          {settings.imageFit !== 'background' && (
+            <div className="space-y-2">
+              <Label>Image Size Ratio: {Math.round(settings.imageHeightRatio * 100)}%</Label>
+              <Slider
+                value={[settings.imageHeightRatio]}
+                onValueChange={([value]) => onUpdate({ imageHeightRatio: value })}
+                min={0.2}
+                max={0.95}
+                step={0.05}
+                className="py-4"
+              />
+              <p className="text-xs text-muted-foreground">Controls how much vertical space images take vs. text. Lower values leave more room for text.</p>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

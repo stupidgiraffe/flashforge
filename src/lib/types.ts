@@ -54,7 +54,7 @@ export type DuplexMode = 'manual' | 'long-edge' | 'short-edge'
 
 export type CardSize = 'extra-large' | 'large' | 'medium' | 'small'
 
-export type ImageFit = 'cover' | 'contain' | 'center'
+export type ImageFit = 'cover' | 'contain' | 'center' | 'background'
 
 export type CaptionPlacement = 'top' | 'bottom' | 'overlay' | 'none'
 
