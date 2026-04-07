@@ -89,14 +89,16 @@ export function FlashCardDisplay({
         borderRadius: settings.showRoundedCorners ? `${settings.cornerRadius}px` : 0,
       }}
     >
-        <div
-          className="absolute top-0 left-0 right-0 h-1"
-          style={{
-            backgroundColor: settings.accentColor,
-            opacity: isBackgroundMode ? 0 : 0.45,
-            borderRadius: printMode || !settings.showRoundedCorners ? '0' : `${settings.cornerRadius}px ${settings.cornerRadius}px 0 0`,
-          }}
-        />
+        {!isBackgroundMode && (
+          <div
+            className="absolute top-0 left-0 right-0 h-1"
+            style={{
+              backgroundColor: settings.accentColor,
+              opacity: 0.45,
+              borderRadius: printMode || !settings.showRoundedCorners ? '0' : `${settings.cornerRadius}px ${settings.cornerRadius}px 0 0`,
+            }}
+          />
+        )}
 
       {/* Background image mode: image fills the entire card */}
       {isBackgroundMode && imageUrl && (
