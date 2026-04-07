@@ -62,6 +62,8 @@ export function FlashCardDisplay({
   const borderClass = settings.showBorder ? 'border-2' : 'border-0'
   const roundedClass = settings.showRoundedCorners ? 'rounded-xl' : 'rounded-none'
 
+  const isBackgroundMode = settings.imageFit === 'background'
+
   // Dynamic image height: use the user-configured ratio, but if there's no text, allow more space.
   // For cards with both image and text, cap at imageHeightRatio. For image-only cards, allow up to 80%.
   const baseRatio = settings.imageHeightRatio
@@ -91,15 +93,45 @@ export function FlashCardDisplay({
           className="absolute top-0 left-0 right-0 h-1"
           style={{
             backgroundColor: settings.accentColor,
-            opacity: 0.45,
+            opacity: isBackgroundMode ? 0 : 0.45,
             borderRadius: printMode || !settings.showRoundedCorners ? '0' : `${settings.cornerRadius}px ${settings.cornerRadius}px 0 0`,
           }}
         />
 
+      {/* Background image mode: image fills the entire card */}
+      {isBackgroundMode && imageUrl && (
+        <>
+          <img
+            src={imageUrl}
+            alt={text || ''}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              objectPosition: 'center',
+              zIndex: 0,
+              transform: imageScale !== 1 ? `scale(${imageScale})` : undefined,
+            }}
+          />
+          {hasText && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background: 'linear-gradient(to top, rgba(0,0,0,0.65) 0%, rgba(0,0,0,0.15) 55%, transparent 100%)',
+                zIndex: 1,
+              }}
+            />
+          )}
+        </>
+      )}
+
       {settings.showNumbering && cardNumber !== undefined && (
         <div
           className="absolute top-3 left-3 text-xs font-semibold opacity-40 z-10"
-          style={{ color: settings.mainColor }}
+          style={{ color: isBackgroundMode && imageUrl ? '#ffffff' : settings.mainColor }}
         >
           #{cardNumber}
         </div>
@@ -108,79 +140,127 @@ export function FlashCardDisplay({
       {showSetTitle && settings.showSetTitle && (
         <div
           className="absolute top-3 right-3 text-xs font-semibold opacity-40 max-w-[60%] truncate z-10"
-          style={{ color: settings.mainColor }}
+          style={{ color: isBackgroundMode && imageUrl ? '#ffffff' : settings.mainColor }}
         >
           {showSetTitle}
         </div>
       )}
 
-      <div className="flex-1 flex flex-col items-center justify-center p-6 gap-1 min-h-0">
-        {imageUrl && (
-          <div
-            className="mb-4 rounded-lg overflow-hidden flex items-center justify-center bg-white/70"
-            style={{
-              width: '100%',
-              maxHeight: `${imageHeight}px`,
-              minHeight: `${minImageHeight}px`,
-              flexShrink: hasText ? 1 : 0,
-            }}
-          >
-            <img
-              src={imageUrl}
-              alt={text || ''}
-              className="w-full h-full"
+      {isBackgroundMode ? (
+        /* Background mode: text sits at the bottom over the gradient scrim */
+        <div
+          className="relative flex-1 flex flex-col items-center justify-end p-6 gap-1 min-h-0"
+          style={{ zIndex: 2 }}
+        >
+          {text && (
+            <div
+              className={cn(
+                'font-bold break-words hyphens-auto w-full text-balance',
+                settings.textAlignment === 'left' && 'text-left',
+                settings.textAlignment === 'center' && 'text-center',
+                settings.textAlignment === 'right' && 'text-right',
+              )}
               style={{
-                objectFit:
-                  settings.imageFit === 'contain'
-                    ? 'contain'
-                    : settings.imageFit === 'center'
-                      ? 'none'
-                      : 'cover',
-                objectPosition: 'center',
-                transform: imageScale !== 1 ? `scale(${imageScale})` : undefined,
+                fontSize: `${fontSize}px`,
+                lineHeight: 1.28,
+                color: imageUrl ? '#ffffff' : settings.mainColor,
+                fontFamily: settings.fontFamily,
+                textShadow: imageUrl ? '0 1px 3px rgba(0,0,0,0.5)' : undefined,
               }}
-            />
-          </div>
-        )}
+            >
+              {text}
+            </div>
+          )}
 
-        {text && (
-          <div
-            className={cn(
-              'font-bold break-words hyphens-auto w-full text-balance',
-              settings.textAlignment === 'left' && 'text-left',
-              settings.textAlignment === 'center' && 'text-center',
-              settings.textAlignment === 'right' && 'text-right',
-            )}
-            style={{
-              fontSize: `${fontSize}px`,
-              lineHeight: 1.28,
-              color: settings.mainColor,
-              fontFamily: settings.fontFamily,
-            }}
-          >
-            {text}
-          </div>
-        )}
+          {secondary && (
+            <div
+              className={cn(
+                'mt-3 break-words w-full text-pretty',
+                settings.textAlignment === 'left' && 'text-left',
+                settings.textAlignment === 'center' && 'text-center',
+                settings.textAlignment === 'right' && 'text-right',
+              )}
+              style={{
+                fontSize: `${secondaryFontSize}px`,
+                lineHeight: 1.38,
+                color: imageUrl ? 'rgba(255,255,255,0.85)' : settings.accentColor,
+                fontFamily: settings.fontFamily,
+                textShadow: imageUrl ? '0 1px 2px rgba(0,0,0,0.5)' : undefined,
+              }}
+            >
+              {secondary}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="flex-1 flex flex-col items-center justify-center p-6 gap-1 min-h-0">
+          {imageUrl && (
+            <div
+              className="mb-4 rounded-lg overflow-hidden flex items-center justify-center bg-white/70"
+              style={{
+                width: '100%',
+                maxHeight: `${imageHeight}px`,
+                minHeight: `${minImageHeight}px`,
+                flexShrink: hasText ? 1 : 0,
+              }}
+            >
+              <img
+                src={imageUrl}
+                alt={text || ''}
+                className="w-full h-full"
+                style={{
+                  objectFit:
+                    settings.imageFit === 'contain'
+                      ? 'contain'
+                      : settings.imageFit === 'center'
+                        ? 'none'
+                        : 'cover',
+                  objectPosition: 'center',
+                  transform: imageScale !== 1 ? `scale(${imageScale})` : undefined,
+                }}
+              />
+            </div>
+          )}
 
-        {secondary && (
-          <div
-            className={cn(
-              'mt-3 break-words w-full text-pretty',
-              settings.textAlignment === 'left' && 'text-left',
-              settings.textAlignment === 'center' && 'text-center',
-              settings.textAlignment === 'right' && 'text-right',
-            )}
-            style={{
-              fontSize: `${secondaryFontSize}px`,
-              lineHeight: 1.38,
-              color: settings.accentColor,
-              fontFamily: settings.fontFamily,
-            }}
-          >
-            {secondary}
-          </div>
-        )}
-      </div>
+          {text && (
+            <div
+              className={cn(
+                'font-bold break-words hyphens-auto w-full text-balance',
+                settings.textAlignment === 'left' && 'text-left',
+                settings.textAlignment === 'center' && 'text-center',
+                settings.textAlignment === 'right' && 'text-right',
+              )}
+              style={{
+                fontSize: `${fontSize}px`,
+                lineHeight: 1.28,
+                color: settings.mainColor,
+                fontFamily: settings.fontFamily,
+              }}
+            >
+              {text}
+            </div>
+          )}
+
+          {secondary && (
+            <div
+              className={cn(
+                'mt-3 break-words w-full text-pretty',
+                settings.textAlignment === 'left' && 'text-left',
+                settings.textAlignment === 'center' && 'text-center',
+                settings.textAlignment === 'right' && 'text-right',
+              )}
+              style={{
+                fontSize: `${secondaryFontSize}px`,
+                lineHeight: 1.38,
+                color: settings.accentColor,
+                fontFamily: settings.fontFamily,
+              }}
+            >
+              {secondary}
+            </div>
+          )}
+        </div>
+      )}
 
       {settings.footerText && (
         <div
