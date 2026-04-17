@@ -117,6 +117,18 @@
     break-inside: avoid;
   }
 
+  .print-page {
+    transform: translate(var(--print-offset-x, 0px), var(--print-offset-y, 0px));
+    transform-origin: top left;
+  }
+
+  .print-back-page {
+    transform: translate(
+      calc(var(--print-offset-x, 0px) + var(--back-page-offset-x, 0mm)),
+      calc(var(--print-offset-y, 0px) + var(--back-page-offset-y, 0mm))
+    );
+  }
+
   * {
     box-shadow: none !important;
     text-shadow: none !important;

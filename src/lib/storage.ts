@@ -50,6 +50,8 @@ function normalizePrintSettings(settings?: Partial<PrintSettings>): PrintSetting
     ...settings,
     horizontalOffset: typeof settings?.horizontalOffset === 'number' ? settings.horizontalOffset : 0,
     verticalOffset: typeof settings?.verticalOffset === 'number' ? settings.verticalOffset : 0,
+    backPageOffsetX: typeof settings?.backPageOffsetX === 'number' && Number.isFinite(settings.backPageOffsetX) ? settings.backPageOffsetX : 0,
+    backPageOffsetY: typeof settings?.backPageOffsetY === 'number' && Number.isFinite(settings.backPageOffsetY) ? settings.backPageOffsetY : 0,
     imageHeightRatio:
       typeof imageHeightRatio === 'number' && Number.isFinite(imageHeightRatio)
         ? Math.min(MAX_IMAGE_HEIGHT_RATIO, Math.max(MIN_IMAGE_HEIGHT_RATIO, imageHeightRatio))

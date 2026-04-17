@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
-import type { PointerEventHandler } from 'react'
+import type { CSSProperties, PointerEventHandler, WheelEventHandler } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Printer, DownloadSimple, UploadSimple, Exam, Image as ImageIcon, Trash, ArrowLeft, DotsThreeVertical, Copy, Sparkle, Stack, CloudArrowUp, CloudArrowDown, LinkSimple, MagnifyingGlass } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
@@ -45,6 +45,8 @@ const TestConfigDialog = lazy(() => import('@/components/TestConfigDialog').then
 const TestDisplay = lazy(() => import('@/components/TestDisplay').then((module) => ({ default: module.TestDisplay })))
 const AnswerKey = lazy(() => import('@/components/TestDisplay').then((module) => ({ default: module.AnswerKey })))
 const MAX_IMAGE_OFFSET = 180
+const MIN_IMAGE_SCALE = 0.6
+const MAX_IMAGE_SCALE = 2
 const TOKEN_REFRESH_BUFFER_MS = 60_000
 
 interface GoogleConfig {
@@ -86,6 +88,10 @@ function promptForBackupFilename(message: string, defaultName: string): string |
 
 function clampImageOffset(base: number, delta: number): number {
   return Math.max(-MAX_IMAGE_OFFSET, Math.min(MAX_IMAGE_OFFSET, base + delta))
+}
+
+function clampImageScale(scale: number): number {
+  return Math.max(MIN_IMAGE_SCALE, Math.min(MAX_IMAGE_SCALE, scale))
 }
 
 function loadGoogleIdentityScript(): Promise<void> {
@@ -805,8 +811,53 @@ interface ImageCropEditorProps {
 
 function ImageCropEditor({ imageUrl, alt, scale, offsetX, offsetY, onChange }: ImageCropEditorProps) {
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; baseX: number; baseY: number } | null>(null)
+  const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map())
+  const pinchRef = useRef<{
+    startDistance: number
+    startScale: number
+    startOffsetX: number
+    startOffsetY: number
+    midpointX: number
+    midpointY: number
+    centerX: number
+    centerY: number
+  } | null>(null)
+
+  useEffect(() => {
+    if (activePointersRef.current.size < 2) {
+      pinchRef.current = null
+    }
+  }, [scale, offsetX, offsetY])
+
+  const getPointerPair = () => {
+    const [first, second] = Array.from(activePointersRef.current.values())
+    if (!first || !second) return null
+    return { first, second }
+  }
+
+  const initializePinch = (target: HTMLDivElement) => {
+    const pair = getPointerPair()
+    if (!pair) return
+    const rect = target.getBoundingClientRect()
+    const dx = pair.second.x - pair.first.x
+    const dy = pair.second.y - pair.first.y
+    const distance = Math.hypot(dx, dy)
+    if (distance <= 0) return
+
+    pinchRef.current = {
+      startDistance: distance,
+      startScale: scale,
+      startOffsetX: offsetX,
+      startOffsetY: offsetY,
+      midpointX: (pair.first.x + pair.second.x) / 2 - rect.left,
+      midpointY: (pair.first.y + pair.second.y) / 2 - rect.top,
+      centerX: rect.width / 2,
+      centerY: rect.height / 2,
+    }
+  }
 
   const handlePointerDown: PointerEventHandler<HTMLDivElement> = (event) => {
+    activePointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
     dragRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -815,9 +866,40 @@ function ImageCropEditor({ imageUrl, alt, scale, offsetX, offsetY, onChange }: I
       baseY: offsetY,
     }
     event.currentTarget.setPointerCapture(event.pointerId)
+    if (activePointersRef.current.size >= 2) {
+      dragRef.current = null
+      initializePinch(event.currentTarget)
+    }
   }
 
   const handlePointerMove: PointerEventHandler<HTMLDivElement> = (event) => {
+    if (activePointersRef.current.has(event.pointerId)) {
+      activePointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    }
+
+    if (activePointersRef.current.size >= 2) {
+      if (!pinchRef.current) {
+        initializePinch(event.currentTarget)
+      }
+      const pinchState = pinchRef.current
+      const pair = getPointerPair()
+      if (pinchState && pair) {
+        const dx = pair.second.x - pair.first.x
+        const dy = pair.second.y - pair.first.y
+        const distance = Math.hypot(dx, dy)
+        if (distance > 0) {
+          const nextScale = clampImageScale(pinchState.startScale * (distance / pinchState.startDistance))
+          const ratio = nextScale / pinchState.startScale
+          const relativeX = pinchState.midpointX - pinchState.centerX - pinchState.startOffsetX
+          const relativeY = pinchState.midpointY - pinchState.centerY - pinchState.startOffsetY
+          const nextOffsetX = clampImageOffset(pinchState.startOffsetX, (1 - ratio) * relativeX)
+          const nextOffsetY = clampImageOffset(pinchState.startOffsetY, (1 - ratio) * relativeY)
+          onChange({ scale: nextScale, offsetX: nextOffsetX, offsetY: nextOffsetY })
+        }
+      }
+      return
+    }
+
     const dragState = dragRef.current
     if (!dragState || dragState.pointerId !== event.pointerId) return
     const nextX = clampImageOffset(dragState.baseX, event.clientX - dragState.startX)
@@ -826,9 +908,34 @@ function ImageCropEditor({ imageUrl, alt, scale, offsetX, offsetY, onChange }: I
   }
 
   const handlePointerUp: PointerEventHandler<HTMLDivElement> = (event) => {
+    activePointersRef.current.delete(event.pointerId)
+    if (activePointersRef.current.size < 2) {
+      pinchRef.current = null
+    }
     if (dragRef.current?.pointerId === event.pointerId) {
       dragRef.current = null
     }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  const handleWheel: WheelEventHandler<HTMLDivElement> = (event) => {
+    if (!event.ctrlKey && !event.metaKey) return
+    event.preventDefault()
+
+    const rect = event.currentTarget.getBoundingClientRect()
+    const centerX = rect.width / 2
+    const centerY = rect.height / 2
+    const midpointX = event.clientX - rect.left
+    const midpointY = event.clientY - rect.top
+    const nextScale = clampImageScale(scale * Math.exp(-event.deltaY * 0.002))
+    const ratio = nextScale / scale
+    const relativeX = midpointX - centerX - offsetX
+    const relativeY = midpointY - centerY - offsetY
+    const nextOffsetX = clampImageOffset(offsetX, (1 - ratio) * relativeX)
+    const nextOffsetY = clampImageOffset(offsetY, (1 - ratio) * relativeY)
+    onChange({ scale: nextScale, offsetX: nextOffsetX, offsetY: nextOffsetY })
   }
 
   return (
@@ -839,6 +946,7 @@ function ImageCropEditor({ imageUrl, alt, scale, offsetX, offsetY, onChange }: I
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
+        onWheel={handleWheel}
       >
         <img
           src={imageUrl}
@@ -859,11 +967,11 @@ function ImageCropEditor({ imageUrl, alt, scale, offsetX, offsetY, onChange }: I
         <Slider
           value={[scale]}
           onValueChange={([value]) => onChange({ scale: value })}
-          min={0.6}
-          max={2}
+          min={MIN_IMAGE_SCALE}
+          max={MAX_IMAGE_SCALE}
           step={0.05}
         />
-        <p className="text-xs text-muted-foreground">Drag image to reposition. Use zoom to crop tighter.</p>
+        <p className="text-xs text-muted-foreground">Drag image to reposition. Pinch (touch/trackpad) or use zoom to crop tighter.</p>
       </div>
     </div>
   )
@@ -1714,22 +1822,22 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 return (
                   <div key={pageIndex}>
                     <div
-                      className="avoid-break"
+                      className="avoid-break print-page"
                       style={{
                         width: set.printSettings.paperSize === 'a4'
                           ? (set.printSettings.orientation === 'landscape' ? '297mm' : '210mm')
                           : (set.printSettings.orientation === 'landscape' ? '11in' : '8.5in'),
-                        height: set.printSettings.paperSize === 'a4'
-                          ? (set.printSettings.orientation === 'landscape' ? '210mm' : '297mm')
-                          : (set.printSettings.orientation === 'landscape' ? '8.5in' : '11in'),
+                          height: set.printSettings.paperSize === 'a4'
+                            ? (set.printSettings.orientation === 'landscape' ? '210mm' : '297mm')
+                            : (set.printSettings.orientation === 'landscape' ? '8.5in' : '11in'),
                         padding: `${layout.marginTop}px ${layout.marginRight}px ${layout.marginBottom}px ${layout.marginLeft}px`,
-                        transform: `translate(${set.printSettings.horizontalOffset}px, ${set.printSettings.verticalOffset}px)`,
-                        transformOrigin: 'top left',
                         pageBreakAfter: 'always',
                         breakAfter: 'page',
                         boxSizing: 'border-box',
                         overflow: 'hidden',
-                      }}
+                        ['--print-offset-x' as string]: `${set.printSettings.horizontalOffset}px`,
+                        ['--print-offset-y' as string]: `${set.printSettings.verticalOffset}px`,
+                      } as CSSProperties}
                     >
                       <div
                         className="grid"
@@ -1758,7 +1866,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
                     {isDoubleSided && backPageCards && (
                       <div
-                        className="avoid-break"
+                        className="avoid-break print-page print-back-page"
                         style={{
                           width: set.printSettings.paperSize === 'a4'
                             ? (set.printSettings.orientation === 'landscape' ? '297mm' : '210mm')
@@ -1767,13 +1875,15 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                             ? (set.printSettings.orientation === 'landscape' ? '210mm' : '297mm')
                             : (set.printSettings.orientation === 'landscape' ? '8.5in' : '11in'),
                           padding: `${layout.marginTop}px ${layout.marginRight}px ${layout.marginBottom}px ${layout.marginLeft}px`,
-                          transform: `translate(${set.printSettings.horizontalOffset}px, ${set.printSettings.verticalOffset}px)`,
-                          transformOrigin: 'top left',
                           pageBreakAfter: isLastPage ? 'auto' : 'always',
                           breakAfter: isLastPage ? 'auto' : 'page',
                           boxSizing: 'border-box',
                           overflow: 'hidden',
-                        }}
+                          ['--print-offset-x' as string]: `${set.printSettings.horizontalOffset}px`,
+                          ['--print-offset-y' as string]: `${set.printSettings.verticalOffset}px`,
+                          ['--back-page-offset-x' as string]: `${set.printSettings.backPageOffsetX}mm`,
+                          ['--back-page-offset-y' as string]: `${set.printSettings.backPageOffsetY}mm`,
+                        } as CSSProperties}
                       >
                         <div
                           className="grid"
