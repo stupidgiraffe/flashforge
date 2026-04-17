@@ -104,6 +104,8 @@ export interface PrintSettings {
   
   horizontalOffset: number
   verticalOffset: number
+  backPageOffsetX: number
+  backPageOffsetY: number
   
   imageHeightRatio: number
 
@@ -177,6 +179,8 @@ export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
   textAlignment: 'center',
   horizontalOffset: 0,
   verticalOffset: 0,
+  backPageOffsetX: 0,
+  backPageOffsetY: 0,
   imageHeightRatio: 0.4,
 }
 

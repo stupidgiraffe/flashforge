@@ -335,6 +335,41 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType, on
               <Slider value={[settings.verticalOffset]} onValueChange={([value]) => onUpdate({ verticalOffset: value })} min={-24} max={24} step={1} />
             </div>
           </div>
+
+          <div className="rounded-lg border border-border p-4 space-y-3">
+            <h4 className="text-sm font-semibold">Advanced: Back Page Offset</h4>
+            <p className="text-xs text-muted-foreground">
+              Fine-tune back-side alignment for duplex printing. Values are in mm and apply to back pages only.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="back-page-offset-x">Back Page X Offset (mm)</Label>
+                <Input
+                  id="back-page-offset-x"
+                  type="number"
+                  step="0.1"
+                  value={settings.backPageOffsetX}
+                  onChange={(e) => {
+                    const value = Number.parseFloat(e.target.value)
+                    onUpdate({ backPageOffsetX: Number.isFinite(value) ? value : 0 })
+                  }}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="back-page-offset-y">Back Page Y Offset (mm)</Label>
+                <Input
+                  id="back-page-offset-y"
+                  type="number"
+                  step="0.1"
+                  value={settings.backPageOffsetY}
+                  onChange={(e) => {
+                    const value = Number.parseFloat(e.target.value)
+                    onUpdate({ backPageOffsetY: Number.isFinite(value) ? value : 0 })
+                  }}
+                />
+              </div>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
