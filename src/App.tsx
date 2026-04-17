@@ -426,11 +426,11 @@ function App() {
   const storageStats = getStorageStats()
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted">
+    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-background via-background to-muted">
       <Toaster position="bottom-right" />
       
       <header className="border-b bg-card/80 backdrop-blur-md sticky top-0 z-50 no-print shadow-sm">
-        <div className="container mx-auto px-6 py-5 flex items-center justify-between">
+        <div className="container mx-auto flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-6 sm:py-5">
           <div>
             <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
               FlashForge
@@ -438,7 +438,7 @@ function App() {
             <p className="text-sm text-muted-foreground mt-1">Create beautiful printable flashcards & tests</p>
           </div>
           
-          <div className="flex gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
             {!currentSet && (
               <>
                 <input
@@ -624,7 +624,7 @@ function App() {
         </div>
       </header>
 
-      <main className="container mx-auto px-6 py-10">
+      <main className="container mx-auto px-4 py-8 sm:px-6 sm:py-10">
         {!currentSet ? (
           <div className="space-y-8">
             <div className="text-center max-w-2xl mx-auto">
@@ -709,7 +709,7 @@ function App() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 h-8 w-8 p-0"
+                              className="h-11 w-11 shrink-0 p-0 opacity-100 transition-opacity sm:h-8 sm:w-8 sm:opacity-0 sm:group-hover:opacity-100"
                               onClick={(e) => e.stopPropagation()}
                             >
                               <DotsThreeVertical className="w-4 h-4" weight="bold" />
@@ -1205,8 +1205,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const pages = paginateCardsFixedLength(set.cards, set.printSettings.cardsPerPage)
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-center justify-between no-print">
+      <div className="space-y-8">
+      <div className="no-print flex flex-wrap items-start justify-between gap-3">
         <div>
           <Button variant="ghost" onClick={onBack} className="mb-3">
             <ArrowLeft className="mr-2" weight="bold" />
@@ -1215,18 +1215,20 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           <h2 className="text-3xl font-bold">{set.title}</h2>
           {set.subtitle && <p className="text-muted-foreground mt-1">{set.subtitle}</p>}
         </div>
-        <Button variant="outline" onClick={handleExportSet} className="shadow-md">
-          <DownloadSimple className="mr-2" weight="bold" />
-          Export Set
-        </Button>
-        <Button variant="outline" onClick={onDuplicate} className="shadow-md">
-          <Copy className="mr-2" weight="bold" />
-          Duplicate Set
-        </Button>
-        <Button onClick={addCard} size="lg" className="shadow-md">
-          <Plus className="mr-2" weight="bold" />
-          Add Card
-        </Button>
+        <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">
+          <Button variant="outline" onClick={handleExportSet} className="shadow-md">
+            <DownloadSimple className="mr-2" weight="bold" />
+            Export Set
+          </Button>
+          <Button variant="outline" onClick={onDuplicate} className="shadow-md">
+            <Copy className="mr-2" weight="bold" />
+            Duplicate Set
+          </Button>
+          <Button onClick={addCard} size="lg" className="shadow-md">
+            <Plus className="mr-2" weight="bold" />
+            Add Card
+          </Button>
+        </div>
       </div>
 
       <div className="flex items-center gap-3 mb-6 no-print">
@@ -1248,12 +1250,14 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       </Suspense>
 
       <Tabs defaultValue="editor" className="no-print">
-        <TabsList className="grid w-full max-w-2xl grid-cols-4">
+        <div className="overflow-x-auto pb-1">
+          <TabsList className={`grid w-full max-w-2xl min-w-[18rem] ${generatedTest ? 'grid-cols-4' : 'grid-cols-3'}`}>
           <TabsTrigger value="editor">Editor</TabsTrigger>
           <TabsTrigger value="design">Design</TabsTrigger>
           <TabsTrigger value="preview">Preview</TabsTrigger>
           {generatedTest && <TabsTrigger value="test">Test</TabsTrigger>}
-        </TabsList>
+          </TabsList>
+        </div>
 
         <TabsContent value="editor" className="space-y-6 mt-6">
           <Card className="shadow-md border-2">
@@ -1332,20 +1336,22 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-2">
                       <Label className="text-base font-semibold">Front Text</Label>
-                      <Input
+                      <Textarea
                         value={card.frontText}
                         onChange={(e) => updateCard(card.id, { frontText: e.target.value })}
                         placeholder="Enter text for front of card"
-                        className="text-base"
+                        className="min-h-24 text-base"
+                        rows={3}
                       />
                     </div>
                     <div className="space-y-2">
                       <Label className="text-base font-semibold">Back Text</Label>
-                      <Input
+                      <Textarea
                         value={card.backText}
                         onChange={(e) => updateCard(card.id, { backText: e.target.value })}
                         placeholder="Enter text for back of card"
-                        className="text-base"
+                        className="min-h-24 text-base"
+                        rows={3}
                       />
                     </div>
                   </div>
@@ -1560,7 +1566,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 {' · '}{set.cards.length} card{set.cards.length !== 1 ? 's' : ''}
               </CardDescription>
             </CardHeader>
-            <CardContent className="overflow-hidden bg-gradient-to-br from-slate-200 via-slate-100 to-blue-50 rounded-b-xl p-6">
+            <CardContent className="overflow-x-auto overflow-y-hidden rounded-b-xl bg-gradient-to-br from-slate-200 via-slate-100 to-blue-50 p-4 sm:p-6">
               <div ref={previewContainerRef} className="space-y-8 flex flex-col items-center">
                 {pages.map((pageCards, pageIndex) => {
                   const isDoubleSidedPreview =
@@ -1724,7 +1730,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
             <DialogDescription>Find an image and insert it directly into your flashcard.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="flex gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row">
               <Input
                 value={imageSearchQuery}
                 onChange={(e) => setImageSearchQuery(e.target.value)}
@@ -1736,7 +1742,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                   }
                 }}
               />
-              <Button onClick={runGoogleImageSearch} disabled={imageSearchLoading}>
+              <Button onClick={runGoogleImageSearch} disabled={imageSearchLoading} className="sm:w-auto">
                 <MagnifyingGlass className="mr-2" weight="bold" />
                 Search
               </Button>
