@@ -823,12 +823,6 @@ function ImageCropEditor({ imageUrl, alt, scale, offsetX, offsetY, onChange }: I
     centerY: number
   } | null>(null)
 
-  useEffect(() => {
-    if (activePointersRef.current.size < 2) {
-      pinchRef.current = null
-    }
-  }, [scale, offsetX, offsetY])
-
   const getPointerPair = () => {
     const [first, second] = Array.from(activePointersRef.current.values())
     if (!first || !second) return null
@@ -912,11 +906,11 @@ function ImageCropEditor({ imageUrl, alt, scale, offsetX, offsetY, onChange }: I
     if (activePointersRef.current.size < 2) {
       pinchRef.current = null
     }
-    if (dragRef.current?.pointerId === event.pointerId) {
-      dragRef.current = null
-    }
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    if (dragRef.current?.pointerId === event.pointerId) {
+      dragRef.current = null
     }
   }
 
@@ -971,7 +965,7 @@ function ImageCropEditor({ imageUrl, alt, scale, offsetX, offsetY, onChange }: I
           max={MAX_IMAGE_SCALE}
           step={0.05}
         />
-        <p className="text-xs text-muted-foreground">Drag image to reposition. Pinch (touch/trackpad) or use zoom to crop tighter.</p>
+        <p className="text-xs text-muted-foreground">Drag image to reposition. Pinch (touch/trackpad) or Ctrl/Cmd + wheel to zoom and crop tighter.</p>
       </div>
     </div>
   )
