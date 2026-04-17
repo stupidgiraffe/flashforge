@@ -88,12 +88,12 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType, on
 
           <div className="space-y-3">
             <Label>Card Type</Label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {(['single-sided', 'double-sided'] as CardType[]).map((type) => (
                 <button
                   key={type}
                   onClick={() => onUpdateCardType(type)}
-                  className={`p-4 rounded-lg border-2 text-left transition-all hover:shadow-md ${
+                  className={`min-h-11 rounded-lg border-2 p-4 text-left transition-all hover:shadow-md ${
                     cardType === type ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'
                   }`}
                 >
@@ -108,12 +108,12 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType, on
 
           <div className="space-y-3">
             <Label>Cards Per Page</Label>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {CARDS_PER_PAGE_OPTIONS.map((count) => (
                 <button
                   key={count}
                   onClick={() => onUpdate({ cardsPerPage: count })}
-                  className={`p-3 rounded-lg border-2 text-center font-semibold transition-all hover:shadow-md ${
+                  className={`min-h-11 rounded-lg border-2 p-3 text-center font-semibold transition-all hover:shadow-md ${
                     settings.cardsPerPage === count
                       ? 'border-primary bg-primary/5 text-primary'
                       : 'border-border hover:border-primary/50'
@@ -156,12 +156,12 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType, on
 
           <div className="space-y-3">
             <Label>Color Scheme</Label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {COLOR_SCHEMES.map((scheme) => (
                 <button
                   key={scheme.name}
                   onClick={() => onUpdate({ mainColor: scheme.main, accentColor: scheme.accent })}
-                  className={`p-3 rounded-lg border-2 flex items-center gap-3 transition-all hover:shadow-md ${
+                  className={`min-h-11 rounded-lg border-2 p-3 flex items-center gap-3 transition-all hover:shadow-md ${
                     settings.mainColor === scheme.main ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'
                   }`}
                 >
@@ -175,7 +175,7 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType, on
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="main-color">Custom Main Color</Label>
               <div className="flex gap-2">
@@ -250,7 +250,7 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType, on
                 <button
                   key={align}
                   onClick={() => onUpdate({ textAlignment: align })}
-                  className={`flex-1 p-3 rounded-lg border-2 flex items-center justify-center transition-all ${
+                  className={`min-h-11 flex-1 rounded-lg border-2 p-3 flex items-center justify-center transition-all ${
                     settings.textAlignment === align ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'
                   }`}
                 >
