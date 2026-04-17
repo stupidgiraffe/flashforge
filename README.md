@@ -19,7 +19,11 @@ FlashForge is a production-ready web application designed for teachers to quickl
 - ✅ **Browser Storage** - All data persists locally, no login required
 - ✅ **Print-Ready Output** - Optimized for clean, professional printing
 - ✅ **Image Support** - Upload images for vocabulary and picture cards
+- ✅ **Image Positioning** - Drag and zoom images to control crop/centering on cards
+- ✅ **Google Image Search** - Search and insert images directly from the editor
 - ✅ **Auto-Save** - Never lose your work
+- ✅ **Backup Naming** - Choose custom names for local and Google Drive backups
+- ✅ **Google Drive Backup** - Connect Drive to save and restore backup files
 
 ### Print & Export
 - 📄 **Browser Print** - Use your browser's "Print to PDF" for reliable exports
@@ -318,7 +322,12 @@ h1, h2, h3, h4, h5, h6 {
 ### Lost my data
 - Check browser's localStorage (DevTools → Application → Local Storage)
 - Data is tied to the domain - use the same URL
-- Future versions will include export/backup features
+- Use Backup → Download All Sets or Google Drive Backups for external copies
+
+### Google integrations not working
+- Confirm Google OAuth Client ID, API key, and Search Engine ID are set in Backup → Google Drive Backups
+- Ensure Google APIs for Drive and Custom Search are enabled in your Google Cloud project
+- Retry after a minute if you hit API rate limits
 
 ## 📝 Roadmap
 

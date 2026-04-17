@@ -45,24 +45,35 @@ export function FlashCardDisplay({
 
   let imageUrl: string | undefined
   let imageScale = 1
+  let imageOffsetX = 0
+  let imageOffsetY = 0
 
   if (isFront) {
     imageUrl = card.frontImageUrl || (card.imagePosition === 'front' || card.imagePosition === 'both' ? card.imageUrl : undefined)
     imageScale = card.frontImageScale ?? card.imageScale ?? 1
+    imageOffsetX = card.frontImageOffsetX ?? 0
+    imageOffsetY = card.frontImageOffsetY ?? 0
   } else {
     imageUrl = card.backImageUrl || (card.imagePosition === 'back' || card.imagePosition === 'both' ? card.imageUrl : undefined)
     imageScale = card.backImageScale ?? card.imageScale ?? 1
+    imageOffsetX = card.backImageOffsetX ?? 0
+    imageOffsetY = card.backImageOffsetY ?? 0
   }
 
   const hasText = !!(text || secondary)
   const textLength = (text?.length || 0) + (secondary?.length || 0)
-  const fontSize = calculateFontSize(settings.fontSize, settings.cardsPerPage, textLength, !!imageUrl && hasText)
+  const fontSize = printMode
+    ? settings.fontSize
+    : calculateFontSize(settings.fontSize, settings.cardsPerPage, textLength, !!imageUrl && hasText)
   const secondaryFontSize = fontSize * 0.72
   const themeClasses = getThemeClasses(settings.theme)
   const borderClass = settings.showBorder ? 'border-2' : 'border-0'
   const roundedClass = settings.showRoundedCorners ? 'rounded-xl' : 'rounded-none'
 
   const isBackgroundMode = settings.imageFit === 'background'
+  const imageTransform = imageScale !== 1 || imageOffsetX !== 0 || imageOffsetY !== 0
+    ? `translate(${imageOffsetX}px, ${imageOffsetY}px) scale(${imageScale})`
+    : undefined
 
   // Dynamic image height: use the user-configured ratio, but if there's no text, allow more space.
   // For cards with both image and text, cap at imageHeightRatio. For image-only cards, allow up to 80%.
@@ -114,7 +125,7 @@ export function FlashCardDisplay({
               objectFit: 'cover',
               objectPosition: 'center',
               zIndex: 0,
-              transform: imageScale !== 1 ? `scale(${imageScale})` : undefined,
+               transform: imageTransform,
             }}
           />
           {hasText && (
@@ -218,7 +229,8 @@ export function FlashCardDisplay({
                         ? 'none'
                         : 'cover',
                   objectPosition: 'center',
-                  transform: imageScale !== 1 ? `scale(${imageScale})` : undefined,
+                  transform: imageTransform,
+                  transformOrigin: 'center center',
                 }}
               />
             </div>
