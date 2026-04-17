@@ -12,6 +12,7 @@ interface DesignPanelProps {
   cardType: CardType
   onUpdate: (updates: Partial<PrintSettings>) => void
   onUpdateCardType: (cardType: CardType) => void
+  onResetToDefaults: () => void
 }
 
 const CARD_THEMES: { value: CardTheme; label: string; description: string }[] = [
@@ -45,7 +46,7 @@ const COLOR_SCHEMES = [
 
 const CARDS_PER_PAGE_OPTIONS: CardsPerPage[] = [1, 2, 4, 6, 8, 9, 10, 12]
 
-export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: DesignPanelProps) {
+export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType, onResetToDefaults }: DesignPanelProps) {
   return (
     <div className="space-y-6">
       <Card className="border-2">
@@ -378,6 +379,16 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType }: 
           )}
         </CardContent>
       </Card>
+
+      <div className="flex justify-end">
+        <button
+          onClick={onResetToDefaults}
+          className="px-4 py-2 rounded-lg border-2 border-border hover:border-primary/50 transition-all text-sm font-medium"
+          type="button"
+        >
+          Reset to Default
+        </button>
+      </div>
     </div>
   )
 }

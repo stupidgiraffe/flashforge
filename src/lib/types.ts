@@ -10,6 +10,10 @@ export interface FlashCard {
   imagePosition?: 'front' | 'back' | 'both'
   frontImageScale?: number
   backImageScale?: number
+  frontImageOffsetX?: number
+  frontImageOffsetY?: number
+  backImageOffsetX?: number
+  backImageOffsetY?: number
   imageScale?: number
   tags?: string[]
   category?: string

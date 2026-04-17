@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
+import type { PointerEventHandler } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus, Printer, DownloadSimple, UploadSimple, Exam, Image as ImageIcon, Trash, ArrowLeft, DotsThreeVertical, Copy, Sparkle, Stack } from '@phosphor-icons/react'
+import { Plus, Printer, DownloadSimple, UploadSimple, Exam, Image as ImageIcon, Trash, ArrowLeft, DotsThreeVertical, Copy, Sparkle, Stack, CloudArrowUp, CloudArrowDown, LinkSimple, MagnifyingGlass } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
@@ -21,13 +22,94 @@ import { generateTestQuestions } from '@/lib/test-utils'
 import { calculatePrintLayout, paginateCardsFixedLength, calculateBackPagePositions } from '@/lib/print-utils'
 import { createStarterSet } from '@/lib/starter-sets'
 
+declare global {
+  interface Window {
+    google?: {
+      accounts?: {
+        oauth2?: {
+          initTokenClient: (config: {
+            client_id: string
+            scope: string
+            callback: (response: { access_token?: string; expires_in?: number; error?: string }) => void
+          }) => {
+            requestAccessToken: (options?: { prompt?: string }) => void
+          }
+        }
+      }
+    }
+  }
+}
+
 const DesignPanel = lazy(() => import('@/components/DesignPanel').then((module) => ({ default: module.DesignPanel })))
 const TestConfigDialog = lazy(() => import('@/components/TestConfigDialog').then((module) => ({ default: module.TestConfigDialog })))
 const TestDisplay = lazy(() => import('@/components/TestDisplay').then((module) => ({ default: module.TestDisplay })))
 const AnswerKey = lazy(() => import('@/components/TestDisplay').then((module) => ({ default: module.AnswerKey })))
+const MAX_IMAGE_OFFSET = 180
+const TOKEN_REFRESH_BUFFER_MS = 60_000
+
+interface GoogleConfig {
+  clientId: string
+  apiKey: string
+  searchEngineId: string
+}
 
 function sortSetsByRecent(items: FlashCardSet[]): FlashCardSet[] {
   return [...items].sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+function getDefaultBackupName() {
+  return `flashforge-backup-${new Date().toISOString().slice(0, 10)}`
+}
+
+function validateBackupFileBaseName(name: string): string | null {
+  const trimmed = name.trim()
+  if (!trimmed) return 'Filename cannot be empty'
+  if (trimmed.length > 80) return 'Filename is too long (max 80 characters)'
+  if (/[<>:"/\\|?*\x00-\x1F]/.test(trimmed)) return 'Filename contains invalid characters'
+  return null
+}
+
+function normalizeBackupDownloadName(baseName: string): string {
+  return baseName.toLowerCase().endsWith('.json') ? baseName : `${baseName}.json`
+}
+
+function promptForBackupFilename(message: string, defaultName: string): string | null {
+  const userInput = window.prompt(message, defaultName)
+  if (userInput === null) return null
+  const error = validateBackupFileBaseName(userInput)
+  if (error) {
+    toast.error(error)
+    return null
+  }
+  return userInput
+}
+
+function clampImageOffset(base: number, delta: number): number {
+  return Math.max(-MAX_IMAGE_OFFSET, Math.min(MAX_IMAGE_OFFSET, base + delta))
+}
+
+function loadGoogleIdentityScript(): Promise<void> {
+  if (window.google?.accounts?.oauth2) {
+    return Promise.resolve()
+  }
+
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-google-gsi="true"]') as HTMLScriptElement | null
+    if (existing) {
+      existing.addEventListener('load', () => resolve(), { once: true })
+      existing.addEventListener('error', () => reject(new Error('Failed to load Google Identity Services script')), { once: true })
+      return
+    }
+
+    const script = document.createElement('script')
+    script.src = 'https://accounts.google.com/gsi/client'
+    script.async = true
+    script.defer = true
+    script.dataset.googleGsi = 'true'
+    script.onload = () => resolve()
+    script.onerror = () => reject(new Error('Failed to load Google Identity Services script'))
+    document.head.appendChild(script)
+  })
 }
 
 function LazySectionFallback({ label }: { label: string }) {
@@ -45,6 +127,13 @@ function App() {
   const [currentSet, setCurrentSet] = useState<FlashCardSet | null>(null)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [newSetTitle, setNewSetTitle] = useState('')
+  const [googleConfig, setGoogleConfig] = useState<GoogleConfig>({ clientId: '', apiKey: '', searchEngineId: '' })
+  const [googleBackupDialogOpen, setGoogleBackupDialogOpen] = useState(false)
+  const [googleDriveFiles, setGoogleDriveFiles] = useState<Array<{ id: string; name: string; modifiedTime?: string }>>([])
+  const [selectedDriveFileId, setSelectedDriveFileId] = useState('')
+  const [googleAccessToken, setGoogleAccessToken] = useState('')
+  const [googleTokenExpiresAt, setGoogleTokenExpiresAt] = useState(0)
+  const [googleBusy, setGoogleBusy] = useState(false)
   const importSetInputRef = useRef<HTMLInputElement | null>(null)
   const importBackupInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -144,15 +233,174 @@ function App() {
       toast.error('No sets to export')
       return
     }
+    const defaultName = getDefaultBackupName()
+    const userInput = promptForBackupFilename('Choose a backup filename', defaultName)
+    if (!userInput) return
+
     const json = exportAllSetsToJSON(sets)
     const blob = new Blob([json], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `flashforge-backup-${new Date().toISOString().slice(0, 10)}.json`
+    a.download = normalizeBackupDownloadName(userInput)
     a.click()
     URL.revokeObjectURL(url)
     toast.success('Backup downloaded!')
+  }
+
+  const getGoogleAccessToken = useCallback(async (interactive: boolean) => {
+    if (!googleConfig.clientId.trim()) {
+      throw new Error('Set a Google OAuth client ID first')
+    }
+
+    const now = Date.now()
+    if (googleAccessToken && googleTokenExpiresAt > now + TOKEN_REFRESH_BUFFER_MS) {
+      return googleAccessToken
+    }
+
+    await loadGoogleIdentityScript()
+    const oauth = window.google?.accounts?.oauth2
+    if (!oauth?.initTokenClient) {
+      throw new Error('Google OAuth client failed to initialize')
+    }
+
+    return await new Promise<string>((resolve, reject) => {
+      const tokenClient = oauth.initTokenClient({
+        client_id: googleConfig.clientId.trim(),
+        scope: 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/drive.file',
+        callback: (response) => {
+          if (response.error || !response.access_token) {
+            reject(new Error(response.error || 'Google authentication failed'))
+            return
+          }
+          const expiresAt = Date.now() + (response.expires_in ?? 3600) * 1000
+          setGoogleAccessToken(response.access_token)
+          setGoogleTokenExpiresAt(expiresAt)
+          resolve(response.access_token)
+        },
+      })
+      if (interactive) {
+        tokenClient.requestAccessToken({ prompt: 'consent' })
+      } else {
+        tokenClient.requestAccessToken()
+      }
+    })
+  }, [googleAccessToken, googleConfig.clientId, googleTokenExpiresAt])
+
+  const fetchGoogleDriveBackups = useCallback(async () => {
+    const token = await getGoogleAccessToken(false).catch(async () => getGoogleAccessToken(true))
+    const response = await fetch('https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&pageSize=30&fields=files(id,name,modifiedTime)&q=mimeType%3D%22application%2Fjson%22', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+    if (!response.ok) {
+      throw new Error('Unable to load Google Drive backups')
+    }
+
+    const data = await response.json() as { files?: Array<{ id: string; name: string; modifiedTime?: string }> }
+    const files = (data.files ?? []).sort((a, b) => (b.modifiedTime ?? '').localeCompare(a.modifiedTime ?? ''))
+    setGoogleDriveFiles(files)
+    if (files.length > 0) {
+      setSelectedDriveFileId(files[0].id)
+    }
+  }, [getGoogleAccessToken])
+
+  async function handleConnectGoogleDrive() {
+    try {
+      setGoogleBusy(true)
+      await getGoogleAccessToken(true)
+      toast.success('Google Drive connected')
+      await fetchGoogleDriveBackups()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to connect Google Drive')
+    } finally {
+      setGoogleBusy(false)
+    }
+  }
+
+  async function handleUploadBackupToGoogleDrive() {
+    if (sets.length === 0) {
+      toast.error('No sets to back up')
+      return
+    }
+
+    const defaultName = getDefaultBackupName()
+    const userInput = promptForBackupFilename('Choose a backup filename for Google Drive', defaultName)
+    if (!userInput) return
+
+    try {
+      setGoogleBusy(true)
+      const token = await getGoogleAccessToken(false).catch(async () => getGoogleAccessToken(true))
+      const filename = normalizeBackupDownloadName(userInput)
+      const json = exportAllSetsToJSON(sets)
+      const boundary = `flashforge-${Date.now()}`
+      const metadata = {
+        name: filename,
+        mimeType: 'application/json',
+        parents: ['appDataFolder'],
+      }
+      const body = [
+        `--${boundary}`,
+        'Content-Type: application/json; charset=UTF-8',
+        '',
+        JSON.stringify(metadata),
+        `--${boundary}`,
+        'Content-Type: application/json',
+        '',
+        json,
+        `--${boundary}--`,
+        '',
+      ].join('\r\n')
+
+      const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`,
+        },
+        body,
+      })
+
+      if (!response.ok) {
+        throw new Error('Google Drive upload failed')
+      }
+
+      toast.success(`Backup saved to Google Drive as "${filename}"`)
+      await fetchGoogleDriveBackups()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to save backup to Google Drive')
+    } finally {
+      setGoogleBusy(false)
+    }
+  }
+
+  async function handleRestoreFromGoogleDrive() {
+    if (!selectedDriveFileId) {
+      toast.error('Select a backup file first')
+      return
+    }
+
+    try {
+      setGoogleBusy(true)
+      const token = await getGoogleAccessToken(false).catch(async () => getGoogleAccessToken(true))
+      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(selectedDriveFileId)}?alt=media`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!response.ok) {
+        throw new Error('Failed to download selected Google Drive backup')
+      }
+
+      const json = await response.text()
+      const imported = importAllSetsFromJSON(json)
+      imported.forEach((s) => saveSet(s))
+      setSets((prev) => sortSetsByRecent([...imported, ...prev]))
+      toast.success(`Imported ${imported.length} set${imported.length !== 1 ? 's' : ''} from Google Drive`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to restore from Google Drive')
+    } finally {
+      setGoogleBusy(false)
+    }
   }
 
   function handlePrint() {
@@ -220,20 +468,24 @@ function App() {
                       Backup
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={handleExportBackup}>
-                      <DownloadSimple className="mr-2 w-4 h-4" weight="bold" />
-                      Download All Sets
-                    </DropdownMenuItem>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={handleExportBackup}>
+                        <DownloadSimple className="mr-2 w-4 h-4" weight="bold" />
+                        Download All Sets
+                      </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => importBackupInputRef.current?.click()}>
                       <UploadSimple className="mr-2 w-4 h-4" weight="bold" />
                       Restore from Backup
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => importSetInputRef.current?.click()}>
-                      <UploadSimple className="mr-2 w-4 h-4" weight="bold" />
-                      Import a Set
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
+                      <DropdownMenuItem onClick={() => importSetInputRef.current?.click()}>
+                        <UploadSimple className="mr-2 w-4 h-4" weight="bold" />
+                        Import a Set
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setGoogleBackupDialogOpen(true)}>
+                        <LinkSimple className="mr-2 w-4 h-4" weight="bold" />
+                        Google Drive Backups
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
                 </DropdownMenu>
               </>
             )}
@@ -282,6 +534,86 @@ function App() {
                 Print
               </Button>
             )}
+            <Dialog open={googleBackupDialogOpen} onOpenChange={setGoogleBackupDialogOpen}>
+              <DialogContent className="sm:max-w-xl">
+                <DialogHeader>
+                  <DialogTitle>Google Integrations</DialogTitle>
+                  <DialogDescription>
+                    Connect Google Drive for cloud backups and configure Google Image Search credentials.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-5 py-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="google-client-id">Google OAuth Client ID</Label>
+                    <Input
+                      id="google-client-id"
+                      value={googleConfig.clientId}
+                      onChange={(e) => setGoogleConfig((prev) => ({ ...prev, clientId: e.target.value }))}
+                      placeholder="12345-abc.apps.googleusercontent.com"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="google-api-key">Google API Key</Label>
+                    <Input
+                      id="google-api-key"
+                      value={googleConfig.apiKey}
+                      onChange={(e) => setGoogleConfig((prev) => ({ ...prev, apiKey: e.target.value }))}
+                      placeholder="Used for Google Image Search"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="google-cx">Google Custom Search Engine ID (cx)</Label>
+                    <Input
+                      id="google-cx"
+                      value={googleConfig.searchEngineId}
+                      onChange={(e) => setGoogleConfig((prev) => ({ ...prev, searchEngineId: e.target.value }))}
+                      placeholder="Used for Google Image Search"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" onClick={handleConnectGoogleDrive} disabled={googleBusy}>
+                      <LinkSimple className="mr-2" weight="bold" />
+                      Connect Google Drive
+                    </Button>
+                    <Button variant="outline" onClick={handleUploadBackupToGoogleDrive} disabled={googleBusy}>
+                      <CloudArrowUp className="mr-2" weight="bold" />
+                      Save Backup to Drive
+                    </Button>
+                    <Button variant="outline" onClick={fetchGoogleDriveBackups} disabled={googleBusy}>
+                      Refresh Backup List
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="drive-backup-file">Restore from Google Drive</Label>
+                    {googleDriveFiles.length > 0 ? (
+                      <Select value={selectedDriveFileId} onValueChange={setSelectedDriveFileId}>
+                        <SelectTrigger id="drive-backup-file">
+                          <SelectValue placeholder="Select backup file" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {googleDriveFiles.map((file) => (
+                            <SelectItem key={file.id} value={file.id}>
+                              {file.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No Google Drive backups found yet.</p>
+                    )}
+                  </div>
+
+                  <div className="flex justify-end">
+                    <Button onClick={handleRestoreFromGoogleDrive} disabled={!selectedDriveFileId || googleBusy}>
+                      <CloudArrowDown className="mr-2" weight="bold" />
+                      Restore Selected Backup
+                    </Button>
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
           </div>
         </div>
       </header>
@@ -436,6 +768,9 @@ function App() {
             onBack={() => setCurrentSet(null)}
             onUpdate={handleUpdateSet}
             onDuplicate={() => handleDuplicateSet(currentSet)}
+            googleImageApiKey={googleConfig.apiKey}
+            googleImageSearchCx={googleConfig.searchEngineId}
+            onOpenGoogleSettings={() => setGoogleBackupDialogOpen(true)}
           />
         )}
       </main>
@@ -448,11 +783,101 @@ interface SetEditorProps {
   onBack: () => void
   onUpdate: (set: FlashCardSet) => void
   onDuplicate: () => void
+  googleImageApiKey: string
+  googleImageSearchCx: string
+  onOpenGoogleSettings: () => void
 }
 
-function SetEditor({ set, onBack, onUpdate, onDuplicate }: SetEditorProps) {
+interface ImageSearchResult {
+  title: string
+  link: string
+  thumbnailLink?: string
+}
+
+interface ImageCropEditorProps {
+  imageUrl: string
+  alt: string
+  scale: number
+  offsetX: number
+  offsetY: number
+  onChange: (updates: { offsetX?: number; offsetY?: number; scale?: number }) => void
+}
+
+function ImageCropEditor({ imageUrl, alt, scale, offsetX, offsetY, onChange }: ImageCropEditorProps) {
+  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; baseX: number; baseY: number } | null>(null)
+
+  const handlePointerDown: PointerEventHandler<HTMLDivElement> = (event) => {
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      baseX: offsetX,
+      baseY: offsetY,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const handlePointerMove: PointerEventHandler<HTMLDivElement> = (event) => {
+    const dragState = dragRef.current
+    if (!dragState || dragState.pointerId !== event.pointerId) return
+    const nextX = clampImageOffset(dragState.baseX, event.clientX - dragState.startX)
+    const nextY = clampImageOffset(dragState.baseY, event.clientY - dragState.startY)
+    onChange({ offsetX: nextX, offsetY: nextY })
+  }
+
+  const handlePointerUp: PointerEventHandler<HTMLDivElement> = (event) => {
+    if (dragRef.current?.pointerId === event.pointerId) {
+      dragRef.current = null
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div
+        className="relative rounded-lg overflow-hidden border-2 border-border bg-muted/20 h-48 touch-none cursor-grab active:cursor-grabbing"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+      >
+        <img
+          src={imageUrl}
+          alt={alt}
+          className="w-full h-full object-cover select-none"
+          draggable={false}
+          style={{
+            transform: `translate(${offsetX}px, ${offsetY}px) scale(${scale})`,
+            transformOrigin: 'center center',
+          }}
+        />
+      </div>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>Crop / zoom</span>
+          <span>{Math.round(scale * 100)}%</span>
+        </div>
+        <Slider
+          value={[scale]}
+          onValueChange={([value]) => onChange({ scale: value })}
+          min={0.6}
+          max={2}
+          step={0.05}
+        />
+        <p className="text-xs text-muted-foreground">Drag image to reposition. Use zoom to crop tighter.</p>
+      </div>
+    </div>
+  )
+}
+
+function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, googleImageSearchCx, onOpenGoogleSettings }: SetEditorProps) {
   const [showTestDialog, setShowTestDialog] = useState(false)
   const [generatedTest, setGeneratedTest] = useState<ReturnType<typeof generateTestQuestions> | null>(null)
+  const [imageSearchOpen, setImageSearchOpen] = useState(false)
+  const [imageSearchCardId, setImageSearchCardId] = useState<string | null>(null)
+  const [imageSearchSide, setImageSearchSide] = useState<'front' | 'back'>('front')
+  const [imageSearchQuery, setImageSearchQuery] = useState('')
+  const [imageSearchResults, setImageSearchResults] = useState<ImageSearchResult[]>([])
+  const [imageSearchLoading, setImageSearchLoading] = useState(false)
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const [previewContainerWidth, setPreviewContainerWidth] = useState(0)
   const previewObserverRef = useRef<ResizeObserver | null>(null)
@@ -498,6 +923,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate }: SetEditorProps) {
       imagePosition: 'front',
       frontImageScale: 1,
       backImageScale: 1,
+      frontImageOffsetX: 0,
+      frontImageOffsetY: 0,
+      backImageOffsetX: 0,
+      backImageOffsetY: 0,
       imageScale: 1,
     }
     updateSet(prev => ({
@@ -537,9 +966,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate }: SetEditorProps) {
         const dataUrl = e.target?.result as string
         const compressed = await compressImage(dataUrl)
         if (side === 'front') {
-          updateCard(cardId, { frontImageUrl: compressed, frontImageScale: 1 })
+          updateCard(cardId, { frontImageUrl: compressed, frontImageScale: 1, frontImageOffsetX: 0, frontImageOffsetY: 0 })
         } else if (side === 'back') {
-          updateCard(cardId, { backImageUrl: compressed, backImageScale: 1 })
+          updateCard(cardId, { backImageUrl: compressed, backImageScale: 1, backImageOffsetX: 0, backImageOffsetY: 0 })
         } else {
           updateCard(cardId, { imageUrl: compressed, imagePosition: 'both', imageScale: 1 })
         }
@@ -554,13 +983,87 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate }: SetEditorProps) {
 
   function removeImage(cardId: string, side: 'front' | 'back' | 'both') {
     if (side === 'front') {
-      updateCard(cardId, { frontImageUrl: undefined, frontImageScale: 1 })
+      updateCard(cardId, { frontImageUrl: undefined, frontImageScale: 1, frontImageOffsetX: 0, frontImageOffsetY: 0 })
     } else if (side === 'back') {
-      updateCard(cardId, { backImageUrl: undefined, backImageScale: 1 })
+      updateCard(cardId, { backImageUrl: undefined, backImageScale: 1, backImageOffsetX: 0, backImageOffsetY: 0 })
     } else {
       updateCard(cardId, { imageUrl: undefined, imagePosition: 'front', imageScale: 1 })
     }
     toast.success('Image removed')
+  }
+
+  function openGoogleImageSearch(cardId: string, side: 'front' | 'back') {
+    setImageSearchCardId(cardId)
+    setImageSearchSide(side)
+    setImageSearchOpen(true)
+  }
+
+  async function runGoogleImageSearch() {
+    if (!googleImageApiKey.trim() || !googleImageSearchCx.trim()) {
+      toast.error('Set Google API key and Search Engine ID first')
+      onOpenGoogleSettings()
+      return
+    }
+    if (!imageSearchQuery.trim()) {
+      toast.error('Enter a keyword to search')
+      return
+    }
+
+    try {
+      setImageSearchLoading(true)
+      const response = await fetch(`https://www.googleapis.com/customsearch/v1?searchType=image&num=10&q=${encodeURIComponent(imageSearchQuery.trim())}&key=${encodeURIComponent(googleImageApiKey.trim())}&cx=${encodeURIComponent(googleImageSearchCx.trim())}`)
+      if (!response.ok) {
+        if (response.status === 429) {
+          throw new Error('Google Image Search rate limit reached. Please try again later.')
+        }
+        throw new Error('Google Image Search request failed')
+      }
+      const data = await response.json() as {
+        items?: Array<{
+          title?: string
+          link?: string
+          image?: { thumbnailLink?: string }
+        }>
+      }
+      const results = (data.items ?? [])
+        .filter((item): item is { title?: string; link: string; image?: { thumbnailLink?: string } } => Boolean(item.link))
+        .map((item) => ({
+          title: item.title ?? 'Image result',
+          link: item.link,
+          thumbnailLink: item.image?.thumbnailLink,
+        }))
+
+      setImageSearchResults(results)
+      if (results.length === 0) {
+        toast.message('No images found for this keyword')
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to search images')
+    } finally {
+      setImageSearchLoading(false)
+    }
+  }
+
+  function handleSelectGoogleImage(url: string) {
+    if (!imageSearchCardId) return
+    if (imageSearchSide === 'front') {
+      updateCard(imageSearchCardId, { frontImageUrl: url, frontImageScale: 1, frontImageOffsetX: 0, frontImageOffsetY: 0 })
+    } else {
+      updateCard(imageSearchCardId, { backImageUrl: url, backImageScale: 1, backImageOffsetX: 0, backImageOffsetY: 0 })
+    }
+    setImageSearchOpen(false)
+    setImageSearchResults([])
+    toast.success('Image inserted')
+  }
+
+  function handleResetFormatting() {
+    const confirmed = window.confirm('Reset all formatting options to default values?')
+    if (!confirmed) return
+    updateSet(prev => ({
+      ...prev,
+      printSettings: { ...DEFAULT_PRINT_SETTINGS },
+    }))
+    toast.success('Formatting reset to defaults')
   }
 
   function handleGenerateTest() {
@@ -764,46 +1267,55 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate }: SetEditorProps) {
 
                         {card.frontImageUrl ? (
                           <div className="space-y-3">
-                            <div className="relative group rounded-lg overflow-hidden border-2 border-border bg-muted/20">
-                              <img 
-                                src={card.frontImageUrl} 
-                                alt="Front" 
-                                className="w-full h-48 object-contain bg-white"
-                                style={{ transform: `scale(${card.frontImageScale ?? 1})`, transformOrigin: 'center center' }}
-                              />
-                              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                <Button
-                                  variant="secondary"
-                                  size="sm"
-                                  onClick={() => fileInputRefs.current[`${card.id}-front`]?.click()}
-                                >
-                                  <ImageIcon className="mr-2" weight="bold" />
-                                  Change
-                                </Button>
-                              </div>
-                            </div>
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                <span>Front image zoom</span>
-                                <span>{Math.round((card.frontImageScale ?? 1) * 100)}%</span>
-                              </div>
-                              <Slider
-                                value={[card.frontImageScale ?? 1]}
-                                onValueChange={([value]) => updateCard(card.id, { frontImageScale: value })}
-                                min={0.6}
-                                max={1.8}
-                                step={0.05}
-                              />
+                            <ImageCropEditor
+                              imageUrl={card.frontImageUrl}
+                              alt="Front"
+                              scale={card.frontImageScale ?? 1}
+                              offsetX={card.frontImageOffsetX ?? 0}
+                              offsetY={card.frontImageOffsetY ?? 0}
+                              onChange={({ offsetX, offsetY, scale }) => updateCard(card.id, {
+                                ...(typeof offsetX === 'number' ? { frontImageOffsetX: offsetX } : {}),
+                                ...(typeof offsetY === 'number' ? { frontImageOffsetY: offsetY } : {}),
+                                ...(typeof scale === 'number' ? { frontImageScale: scale } : {}),
+                              })}
+                            />
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => fileInputRefs.current[`${card.id}-front`]?.click()}
+                              >
+                                <ImageIcon className="mr-2" weight="bold" />
+                                Change
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => openGoogleImageSearch(card.id, 'front')}
+                              >
+                                <MagnifyingGlass className="mr-2" weight="bold" />
+                                Search Google Images
+                              </Button>
                             </div>
                           </div>
                         ) : (
-                          <div
-                            onClick={() => fileInputRefs.current[`${card.id}-front`]?.click()}
-                            className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-primary hover:bg-primary/5 transition-all"
-                          >
-                            <ImageIcon className="w-10 h-10 mx-auto mb-3 text-muted-foreground" weight="duotone" />
-                            <p className="text-sm font-medium text-foreground mb-1">Add front image</p>
-                            <p className="text-xs text-muted-foreground">PNG, JPG up to 5MB</p>
+                          <div className="space-y-2">
+                            <div
+                              onClick={() => fileInputRefs.current[`${card.id}-front`]?.click()}
+                              className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-primary hover:bg-primary/5 transition-all"
+                            >
+                              <ImageIcon className="w-10 h-10 mx-auto mb-3 text-muted-foreground" weight="duotone" />
+                              <p className="text-sm font-medium text-foreground mb-1">Add front image</p>
+                              <p className="text-xs text-muted-foreground">PNG, JPG up to 5MB</p>
+                            </div>
+                            <Button
+                              variant="outline"
+                              className="w-full"
+                              onClick={() => openGoogleImageSearch(card.id, 'front')}
+                            >
+                              <MagnifyingGlass className="mr-2" weight="bold" />
+                              Search Google Images
+                            </Button>
                           </div>
                         )}
 
@@ -840,46 +1352,55 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate }: SetEditorProps) {
 
                         {card.backImageUrl ? (
                           <div className="space-y-3">
-                            <div className="relative group rounded-lg overflow-hidden border-2 border-border bg-muted/20">
-                              <img 
-                                src={card.backImageUrl} 
-                                alt="Back" 
-                                className="w-full h-48 object-contain bg-white"
-                                style={{ transform: `scale(${card.backImageScale ?? 1})`, transformOrigin: 'center center' }}
-                              />
-                              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                <Button
-                                  variant="secondary"
-                                  size="sm"
-                                  onClick={() => fileInputRefs.current[`${card.id}-back`]?.click()}
-                                >
-                                  <ImageIcon className="mr-2" weight="bold" />
-                                  Change
-                                </Button>
-                              </div>
-                            </div>
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                <span>Back image zoom</span>
-                                <span>{Math.round((card.backImageScale ?? 1) * 100)}%</span>
-                              </div>
-                              <Slider
-                                value={[card.backImageScale ?? 1]}
-                                onValueChange={([value]) => updateCard(card.id, { backImageScale: value })}
-                                min={0.6}
-                                max={1.8}
-                                step={0.05}
-                              />
+                            <ImageCropEditor
+                              imageUrl={card.backImageUrl}
+                              alt="Back"
+                              scale={card.backImageScale ?? 1}
+                              offsetX={card.backImageOffsetX ?? 0}
+                              offsetY={card.backImageOffsetY ?? 0}
+                              onChange={({ offsetX, offsetY, scale }) => updateCard(card.id, {
+                                ...(typeof offsetX === 'number' ? { backImageOffsetX: offsetX } : {}),
+                                ...(typeof offsetY === 'number' ? { backImageOffsetY: offsetY } : {}),
+                                ...(typeof scale === 'number' ? { backImageScale: scale } : {}),
+                              })}
+                            />
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => fileInputRefs.current[`${card.id}-back`]?.click()}
+                              >
+                                <ImageIcon className="mr-2" weight="bold" />
+                                Change
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => openGoogleImageSearch(card.id, 'back')}
+                              >
+                                <MagnifyingGlass className="mr-2" weight="bold" />
+                                Search Google Images
+                              </Button>
                             </div>
                           </div>
                         ) : (
-                          <div
-                            onClick={() => fileInputRefs.current[`${card.id}-back`]?.click()}
-                            className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-primary hover:bg-primary/5 transition-all"
-                          >
-                            <ImageIcon className="w-10 h-10 mx-auto mb-3 text-muted-foreground" weight="duotone" />
-                            <p className="text-sm font-medium text-foreground mb-1">Add back image</p>
-                            <p className="text-xs text-muted-foreground">PNG, JPG up to 5MB</p>
+                          <div className="space-y-2">
+                            <div
+                              onClick={() => fileInputRefs.current[`${card.id}-back`]?.click()}
+                              className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-primary hover:bg-primary/5 transition-all"
+                            >
+                              <ImageIcon className="w-10 h-10 mx-auto mb-3 text-muted-foreground" weight="duotone" />
+                              <p className="text-sm font-medium text-foreground mb-1">Add back image</p>
+                              <p className="text-xs text-muted-foreground">PNG, JPG up to 5MB</p>
+                            </div>
+                            <Button
+                              variant="outline"
+                              className="w-full"
+                              onClick={() => openGoogleImageSearch(card.id, 'back')}
+                            >
+                              <MagnifyingGlass className="mr-2" weight="bold" />
+                              Search Google Images
+                            </Button>
                           </div>
                         )}
 
@@ -920,6 +1441,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate }: SetEditorProps) {
               onUpdateCardType={(cardType) => {
                 updateSet(prev => ({ ...prev, cardType }))
               }}
+              onResetToDefaults={handleResetFormatting}
             />
           </Suspense>
         </TabsContent>
@@ -1092,6 +1614,56 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate }: SetEditorProps) {
           </TabsContent>
         )}
       </Tabs>
+
+      <Dialog open={imageSearchOpen} onOpenChange={setImageSearchOpen}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Search Google Images</DialogTitle>
+            <DialogDescription>Find an image and insert it directly into your flashcard.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex gap-2">
+              <Input
+                value={imageSearchQuery}
+                onChange={(e) => setImageSearchQuery(e.target.value)}
+                placeholder="Search for an image..."
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    runGoogleImageSearch()
+                  }
+                }}
+              />
+              <Button onClick={runGoogleImageSearch} disabled={imageSearchLoading}>
+                <MagnifyingGlass className="mr-2" weight="bold" />
+                Search
+              </Button>
+            </div>
+
+            {imageSearchResults.length > 0 ? (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-h-[420px] overflow-y-auto pr-1">
+                {imageSearchResults.map((result) => (
+                  <button
+                    key={result.link}
+                    className="text-left border rounded-lg overflow-hidden hover:border-primary transition-colors"
+                    onClick={() => handleSelectGoogleImage(result.link)}
+                    type="button"
+                  >
+                    <img
+                      src={result.thumbnailLink || result.link}
+                      alt={result.title}
+                      className="w-full h-28 object-cover bg-muted"
+                    />
+                    <div className="p-2 text-xs line-clamp-2">{result.title}</div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No results yet. Search by keyword to load image options.</p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {createPortal(
         <div className="print-only">
