@@ -20,7 +20,7 @@ FlashForge is a production-ready web application designed for teachers to quickl
 - ✅ **Print-Ready Output** - Optimized for clean, professional printing
 - ✅ **Image Support** - Upload images for vocabulary and picture cards
 - ✅ **Image Positioning** - Drag and zoom images to control crop/centering on cards
-- ✅ **Web Image Search** - Search/scrape and insert real web images directly from the editor, with optional Google Custom Search BYOK
+- ✅ **Google Image Search** - Search and insert images directly from the editor
 - ✅ **Auto-Save** - Never lose your work
 - ✅ **Backup Naming** - Choose custom names for local and Google Drive backups
 - ✅ **Google Drive Backup** - Connect Drive to save and restore backup files
@@ -384,28 +384,19 @@ Built with:
 
 For questions, issues, or feature requests, please open an issue on GitHub.
 
-## BYOK Flashcard Agent
+## BYOK Image Agent
 
-FlashForge includes an optional **Flashcard Agent** for creating or enhancing whole cards. It can generate front text, back text, front image queries, back image queries, and then search/scrape real web images for the selected sides.
+FlashForge includes an optional **Image Agent** for bulk image search. It uses the teacher's own Google Custom Search API key and Search Engine ID (`cx`) from Google Integrations, then applies results to the front, back, or both sides of cards.
 
 Key behavior:
 
-- BYOK AI: enter your own OpenAI-compatible API base URL, model name, and API key in the Flashcard Agent dialog. No shared model key is shipped.
-- Not Google-only: image search uses FlashForge's serverless web-image search first and can fall back through Google Custom Search if the user supplies Google credentials.
-- Full-card generation: the agent can create new cards or enhance existing cards, including front/back text and front/back images.
-- User-controlled images: choose front, back, or both sides; choose overwrite behavior; optionally download/embed images when the serverless endpoint can fetch them.
-- Centering: agent-added images start with neutral crop controls (`scale=1`, `offsetX=0`, `offsetY=0`) so they are centered by default, and teachers can still use the built-in drag/zoom controls for final positioning.
+- BYOK only: FlashForge does not ship a shared image-search key.
+- User-controlled: the teacher chooses the query template, side selection, overwrite behavior, and whether to download/embed images when the serverless API is available.
 - Risk acknowledgement: the dialog requires the user to accept responsibility for copyright, likeness, classroom appropriateness, and other image-use risks before running.
+- Graceful fallback: if `/api/image-agent` is unavailable in local static/Vite mode, the app falls back to browser-side Google Custom Search and inserts image URLs.
+- Optional embedding: deployed Vercel/serverless mode can download image bytes and store data URLs in cards, subject to image host availability and size limits.
 
-Recommended agent instructions:
-
-```text
-Create funny, classroom-safe ESL family flashcards for Japanese elementary students. Use short front text, useful back text, and specific real character/object image search queries.
-Create 20 food vocabulary cards. Front: English word. Back: simple Japanese meaning and example sentence. Use real food photo queries.
-Enhance these cards with more natural back text and funny but classroom-safe image queries.
-```
-
-Recommended image-only query templates:
+Recommended query templates:
 
 ```text
 {front} funny character clear image
