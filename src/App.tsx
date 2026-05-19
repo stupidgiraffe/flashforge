@@ -545,7 +545,7 @@ function App() {
                 <DialogHeader>
                   <DialogTitle>Google Integrations</DialogTitle>
                   <DialogDescription>
-                    Connect Google Drive for cloud backups and configure Google Image Search credentials.
+                    Connect Google Drive for cloud backups and optionally configure Google Custom Search credentials. Image search also has a non-Google web fallback.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-5 py-2">
@@ -564,7 +564,7 @@ function App() {
                       id="google-api-key"
                       value={googleConfig.apiKey}
                       onChange={(e) => setGoogleConfig((prev) => ({ ...prev, apiKey: e.target.value }))}
-                      placeholder="Used for Google Image Search"
+                      placeholder="Optional: improves image search"
                     />
                   </div>
                   <div className="space-y-2">
@@ -573,7 +573,7 @@ function App() {
                       id="google-cx"
                       value={googleConfig.searchEngineId}
                       onChange={(e) => setGoogleConfig((prev) => ({ ...prev, searchEngineId: e.target.value }))}
-                      placeholder="Used for Google Image Search"
+                      placeholder="Optional: improves image search"
                     />
                   </div>
 
@@ -801,6 +801,7 @@ interface ImageSearchResult {
 }
 
 type ImageAgentTargetSide = 'front' | 'back' | 'both'
+type FlashcardAgentMode = 'create' | 'enhance'
 
 interface ImageAgentCardRequest {
   id: string
@@ -819,6 +820,15 @@ interface ImageAgentResult {
   sourcePage?: string
   embedded?: boolean
   error?: string
+}
+
+interface FlashcardAgentGeneratedCard extends Partial<FlashCard> {
+  id: string
+  frontText: string
+  backText: string
+  frontImageQuery?: string
+  backImageQuery?: string
+  imageSources?: Array<{ side: string; query?: string; title?: string; url?: string; provider?: string; error?: string; embedded?: boolean }>
 }
 
 interface ImageCropEditorProps {
@@ -1002,7 +1012,14 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [imageSearchResults, setImageSearchResults] = useState<ImageSearchResult[]>([])
   const [imageSearchLoading, setImageSearchLoading] = useState(false)
   const [imageAgentOpen, setImageAgentOpen] = useState(false)
-  const [imageAgentSide, setImageAgentSide] = useState<ImageAgentTargetSide>('front')
+  const [flashcardAgentMode, setFlashcardAgentMode] = useState<FlashcardAgentMode>('enhance')
+  const [flashcardAgentInstructions, setFlashcardAgentInstructions] = useState('Create funny, classroom-safe ESL flashcards. Use short front text, useful back text, and specific real web image search queries.')
+  const [flashcardAgentCount, setFlashcardAgentCount] = useState('10')
+  const [flashcardAgentAiKey, setFlashcardAgentAiKey] = useState('')
+  const [flashcardAgentBaseUrl, setFlashcardAgentBaseUrl] = useState('https://api.openai.com/v1')
+  const [flashcardAgentModel, setFlashcardAgentModel] = useState('')
+  const [flashcardAgentGenerateText, setFlashcardAgentGenerateText] = useState(true)
+  const [imageAgentSide, setImageAgentSide] = useState<ImageAgentTargetSide>('both')
   const [imageAgentQueryTemplate, setImageAgentQueryTemplate] = useState('{front} funny character clear image')
   const [imageAgentEmbed, setImageAgentEmbed] = useState(false)
   const [imageAgentOverwrite, setImageAgentOverwrite] = useState(false)
@@ -1123,18 +1140,13 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     toast.success('Image removed')
   }
 
-  function openGoogleImageSearch(cardId: string, side: 'front' | 'back') {
+  function openWebImageSearch(cardId: string, side: 'front' | 'back') {
     setImageSearchCardId(cardId)
     setImageSearchSide(side)
     setImageSearchOpen(true)
   }
 
-  async function runGoogleImageSearch() {
-    if (!googleImageApiKey.trim() || !googleImageSearchCx.trim()) {
-      toast.error('Set Google API key and Search Engine ID first')
-      onOpenGoogleSettings()
-      return
-    }
+  async function runWebImageSearch() {
     if (!imageSearchQuery.trim()) {
       toast.error('Enter a keyword to search')
       return
@@ -1142,32 +1154,36 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
     try {
       setImageSearchLoading(true)
-      const response = await fetch(`https://www.googleapis.com/customsearch/v1?searchType=image&num=10&q=${encodeURIComponent(imageSearchQuery.trim())}&key=${encodeURIComponent(googleImageApiKey.trim())}&cx=${encodeURIComponent(googleImageSearchCx.trim())}`)
+      const response = await fetch('/api/image-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: imageSearchQuery.trim(),
+          googleApiKey: googleImageApiKey.trim(),
+          googleCx: googleImageSearchCx.trim(),
+          provider: 'auto',
+          limit: 10,
+        }),
+      })
       if (!response.ok) {
-        if (response.status === 429) {
-          throw new Error('Google Image Search rate limit reached. Please try again later.')
+        if (googleImageApiKey.trim() && googleImageSearchCx.trim()) {
+          const fallback = await fetch(`https://www.googleapis.com/customsearch/v1?searchType=image&num=10&q=${encodeURIComponent(imageSearchQuery.trim())}&key=${encodeURIComponent(googleImageApiKey.trim())}&cx=${encodeURIComponent(googleImageSearchCx.trim())}`)
+          if (!fallback.ok) throw new Error('Image search failed')
+          const data = await fallback.json() as { items?: Array<{ title?: string; link?: string; image?: { thumbnailLink?: string } }> }
+          const results = (data.items ?? [])
+            .filter((item): item is { title?: string; link: string; image?: { thumbnailLink?: string } } => Boolean(item.link))
+            .map((item) => ({ title: item.title ?? 'Image result', link: item.link, thumbnailLink: item.image?.thumbnailLink }))
+          setImageSearchResults(results)
+          if (results.length === 0) toast.message('No images found for this keyword')
+          return
         }
-        throw new Error('Google Image Search request failed')
+        const errorBody = await response.json().catch(() => ({ error: 'Image search failed' })) as { error?: string }
+        throw new Error(errorBody.error || 'Image search failed')
       }
-      const data = await response.json() as {
-        items?: Array<{
-          title?: string
-          link?: string
-          image?: { thumbnailLink?: string }
-        }>
-      }
-      const results = (data.items ?? [])
-        .filter((item): item is { title?: string; link: string; image?: { thumbnailLink?: string } } => Boolean(item.link))
-        .map((item) => ({
-          title: item.title ?? 'Image result',
-          link: item.link,
-          thumbnailLink: item.image?.thumbnailLink,
-        }))
-
+      const data = await response.json() as { results?: ImageSearchResult[] }
+      const results = data.results ?? []
       setImageSearchResults(results)
-      if (results.length === 0) {
-        toast.message('No images found for this keyword')
-      }
+      if (results.length === 0) toast.message('No images found for this keyword')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to search images')
     } finally {
@@ -1175,7 +1191,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     }
   }
 
-  function handleSelectGoogleImage(url: string) {
+  function handleSelectWebImage(url: string) {
     if (!imageSearchCardId) return
     if (imageSearchSide === 'front') {
       updateCard(imageSearchCardId, { frontImageUrl: url, frontImageScale: 1, frontImageOffsetX: 0, frontImageOffsetY: 0 })
@@ -1229,59 +1245,131 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   }
 
   async function runImageAgent() {
-    if (!googleImageApiKey.trim() || !googleImageSearchCx.trim()) {
-      toast.error('Set Google API key and Search Engine ID first')
-      onOpenGoogleSettings()
-      return
-    }
     if (!imageAgentAcceptedRisk) {
       toast.error('Please accept the image-use responsibility notice first')
       return
     }
 
-    const targetCards = set.cards.filter(cardNeedsAgentImage)
-    if (targetCards.length === 0) {
-      toast.message('No cards need images with the current settings')
+    const needsAi = flashcardAgentMode === 'create' || flashcardAgentGenerateText
+    if (needsAi && (!flashcardAgentAiKey.trim() || !flashcardAgentModel.trim())) {
+      toast.error('Enter your BYOK AI API key and model first, or turn off text generation for image-only enhancement')
       return
     }
 
-    const cards = targetCards.map((card): ImageAgentCardRequest => ({
-      id: card.id,
-      frontText: card.frontText,
-      backText: card.backText,
-      query: buildImageAgentQuery(card, imageAgentSide),
-    }))
-
     try {
       setImageAgentLoading(true)
-      setImageAgentLog([`Searching ${cards.length} card${cards.length === 1 ? '' : 's'}...`])
-      let results: ImageAgentResult[]
+      setImageAgentLog([needsAi ? 'Asking the BYOK AI to create flashcard content...' : 'Searching web images for existing cards...'])
 
+      if (needsAi) {
+        const response = await fetch('/api/flashcard-agent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: flashcardAgentMode,
+            title: set.title,
+            instructions: flashcardAgentInstructions,
+            count: Number(flashcardAgentCount || 10),
+            existingCards: set.cards,
+            aiApiKey: flashcardAgentAiKey.trim(),
+            aiBaseUrl: flashcardAgentBaseUrl.trim(),
+            aiModel: flashcardAgentModel.trim(),
+            includeImages: true,
+            imageSide: imageAgentSide,
+            imageProvider: 'auto',
+            googleApiKey: googleImageApiKey.trim(),
+            googleCx: googleImageSearchCx.trim(),
+            embedImages: imageAgentEmbed,
+          }),
+        })
+        const data = await response.json().catch(() => ({ error: 'Flashcard Agent failed' })) as { cards?: FlashcardAgentGeneratedCard[]; error?: string }
+        if (!response.ok) throw new Error(data.error || 'Flashcard Agent failed')
+        const generatedCards = data.cards ?? []
+        if (generatedCards.length === 0) throw new Error('Flashcard Agent returned no cards')
+
+        updateSet(prev => {
+          if (flashcardAgentMode === 'create') {
+            return {
+              ...prev,
+              cards: [...prev.cards, ...generatedCards.map((card) => ({
+                id: card.id,
+                frontText: card.frontText,
+                backText: card.backText,
+                frontImageUrl: card.frontImageUrl,
+                backImageUrl: card.backImageUrl,
+                imagePosition: 'front' as const,
+                frontImageScale: 1,
+                backImageScale: 1,
+                frontImageOffsetX: 0,
+                frontImageOffsetY: 0,
+                backImageOffsetX: 0,
+                backImageOffsetY: 0,
+                imageScale: 1,
+              }))],
+            }
+          }
+          const byId = new Map(generatedCards.map((card) => [card.id, card]))
+          return {
+            ...prev,
+            cards: prev.cards.map((card) => {
+              const generated = byId.get(card.id)
+              if (!generated) return card
+              return {
+                ...card,
+                frontText: generated.frontText || card.frontText,
+                backText: generated.backText || card.backText,
+                frontImageUrl: generated.frontImageUrl || card.frontImageUrl,
+                backImageUrl: generated.backImageUrl || card.backImageUrl,
+                frontImageScale: 1,
+                backImageScale: 1,
+                frontImageOffsetX: 0,
+                frontImageOffsetY: 0,
+                backImageOffsetX: 0,
+                backImageOffsetY: 0,
+              }
+            }),
+          }
+        })
+
+        const imageNotes = generatedCards.flatMap((card) => card.imageSources ?? [])
+        setImageAgentLog([
+          `✓ Generated ${generatedCards.length} flashcard${generatedCards.length === 1 ? '' : 's'}.`,
+          ...imageNotes.slice(0, 80).map((source) => source.error ? `✕ ${source.side}: ${source.query}: ${source.error}` : `✓ ${source.side}: ${source.query || source.title || source.url}${source.embedded ? ' (embedded)' : ''}`),
+        ])
+        toast.success(`Flashcard Agent generated ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'}`)
+        return
+      }
+
+      const targetCards = set.cards.filter(cardNeedsAgentImage)
+      if (targetCards.length === 0) {
+        toast.message('No cards need images with the current settings')
+        return
+      }
+      const cards = targetCards.map((card): ImageAgentCardRequest => ({
+        id: card.id,
+        frontText: card.frontText,
+        backText: card.backText,
+        query: buildImageAgentQuery(card, imageAgentSide),
+      }))
       const response = await fetch('/api/image-agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          apiKey: googleImageApiKey.trim(),
-          cx: googleImageSearchCx.trim(),
+          googleApiKey: googleImageApiKey.trim(),
+          googleCx: googleImageSearchCx.trim(),
+          provider: 'auto',
           cards,
           embedImages: imageAgentEmbed,
         }),
       })
-
-      if (response.ok) {
-        const data = await response.json() as { results?: ImageAgentResult[] }
-        results = data.results ?? []
-      } else {
-        results = await searchImagesClientSide(cards)
-      }
-
+      const data = await response.json().catch(() => ({ results: [], error: 'Flashcard Agent failed' })) as { results?: ImageAgentResult[]; error?: string }
+      if (!response.ok) throw new Error(data.error || 'Flashcard Agent failed')
+      const results = data.results ?? []
       const resultByCard = new Map(results.filter((result) => result.dataUrl || result.imageUrl).map((result) => [result.cardId, result]))
       updateSet(prev => ({
         ...prev,
         cards: prev.cards.map((card) => {
           const result = resultByCard.get(card.id)
-          if (!result) return card
-          const imageUrl = result.dataUrl || result.imageUrl
+          const imageUrl = result?.dataUrl || result?.imageUrl
           if (!imageUrl) return card
           const updates: Partial<FlashCard> = {}
           if (imageAgentSide === 'front' || imageAgentSide === 'both') {
@@ -1299,16 +1387,12 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           return { ...card, ...updates }
         }),
       }))
-
       const applied = resultByCard.size
       const failed = results.length - applied
-      setImageAgentLog(results.map((result) => result.error
-        ? `✕ ${result.query}: ${result.error}`
-        : `✓ ${result.query}: ${result.title || result.imageUrl}${result.embedded ? ' (embedded)' : ''}`
-      ))
-      toast.success(`Image Agent applied ${applied} image${applied === 1 ? '' : 's'}${failed > 0 ? `; ${failed} failed` : ''}`)
+      setImageAgentLog(results.map((result) => result.error ? `✕ ${result.query}: ${result.error}` : `✓ ${result.query}: ${result.title || result.imageUrl}${result.embedded ? ' (embedded)' : ''}`))
+      toast.success(`Flashcard Agent applied ${applied} image${applied === 1 ? '' : 's'}${failed > 0 ? `; ${failed} failed` : ''}`)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Image Agent failed')
+      toast.error(error instanceof Error ? error.message : 'Flashcard Agent failed')
     } finally {
       setImageAgentLoading(false)
     }
@@ -1394,7 +1478,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         </Button>
         <Button variant="outline" onClick={() => setImageAgentOpen(true)} disabled={set.cards.length === 0} className="shadow-sm">
           <Sparkle className="mr-2" weight="bold" />
-          Image Agent
+          Flashcard Agent
         </Button>
       </div>
 
@@ -1559,10 +1643,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                               <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() => openGoogleImageSearch(card.id, 'front')}
+                                onClick={() => openWebImageSearch(card.id, 'front')}
                               >
                                 <MagnifyingGlass className="mr-2" weight="bold" />
-                                Search Google Images
+                                Search Web Images
                               </Button>
                             </div>
                           </div>
@@ -1579,10 +1663,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                             <Button
                               variant="outline"
                               className="w-full"
-                              onClick={() => openGoogleImageSearch(card.id, 'front')}
+                              onClick={() => openWebImageSearch(card.id, 'front')}
                             >
                               <MagnifyingGlass className="mr-2" weight="bold" />
-                              Search Google Images
+                              Search Web Images
                             </Button>
                           </div>
                         )}
@@ -1644,10 +1728,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                               <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() => openGoogleImageSearch(card.id, 'back')}
+                                onClick={() => openWebImageSearch(card.id, 'back')}
                               >
                                 <MagnifyingGlass className="mr-2" weight="bold" />
-                                Search Google Images
+                                Search Web Images
                               </Button>
                             </div>
                           </div>
@@ -1664,10 +1748,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                             <Button
                               variant="outline"
                               className="w-full"
-                              onClick={() => openGoogleImageSearch(card.id, 'back')}
+                              onClick={() => openWebImageSearch(card.id, 'back')}
                             >
                               <MagnifyingGlass className="mr-2" weight="bold" />
-                              Search Google Images
+                              Search Web Images
                             </Button>
                           </div>
                         )}
@@ -1886,9 +1970,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       <Dialog open={imageAgentOpen} onOpenChange={setImageAgentOpen}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Image Agent</DialogTitle>
+            <DialogTitle>Flashcard Agent</DialogTitle>
             <DialogDescription>
-              Bulk-search real web images for this set using your own Google Custom Search API key.
+              Create full flashcards with BYOK AI, then search/scrape real web images for the front and/or back.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-5">
@@ -1908,6 +1992,43 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
+                <Label htmlFor="flashcard-agent-mode">Agent mode</Label>
+                <Select value={flashcardAgentMode} onValueChange={(value) => setFlashcardAgentMode(value as FlashcardAgentMode)}>
+                  <SelectTrigger id="flashcard-agent-mode"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="enhance">Enhance current cards</SelectItem>
+                    <SelectItem value="create">Create new cards</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="flashcard-agent-count">New card count</Label>
+                <Input id="flashcard-agent-count" type="number" min="1" max="40" value={flashcardAgentCount} onChange={(event) => setFlashcardAgentCount(event.target.value)} />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="flashcard-agent-instructions">Agent instructions</Label>
+              <Textarea id="flashcard-agent-instructions" value={flashcardAgentInstructions} onChange={(event) => setFlashcardAgentInstructions(event.target.value)} rows={3} />
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="space-y-2 sm:col-span-1">
+                <Label htmlFor="flashcard-agent-model">AI model</Label>
+                <Input id="flashcard-agent-model" value={flashcardAgentModel} onChange={(event) => setFlashcardAgentModel(event.target.value)} placeholder="your-provider-model" />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="flashcard-agent-base-url">OpenAI-compatible base URL</Label>
+                <Input id="flashcard-agent-base-url" value={flashcardAgentBaseUrl} onChange={(event) => setFlashcardAgentBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" />
+              </div>
+              <div className="space-y-2 sm:col-span-3">
+                <Label htmlFor="flashcard-agent-ai-key">BYOK AI API key</Label>
+                <Input id="flashcard-agent-ai-key" type="password" value={flashcardAgentAiKey} onChange={(event) => setFlashcardAgentAiKey(event.target.value)} placeholder="Only sent to your chosen provider when you run the agent" />
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
                 <Label htmlFor="image-agent-side">Apply images to</Label>
                 <Select value={imageAgentSide} onValueChange={(value) => setImageAgentSide(value as ImageAgentTargetSide)}>
                   <SelectTrigger id="image-agent-side">
@@ -1924,6 +2045,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 <Label>Options</Label>
                 <div className="space-y-2 rounded-md border p-3 text-sm">
                   <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={flashcardAgentGenerateText} onChange={(event) => setFlashcardAgentGenerateText(event.target.checked)} />
+                    Let AI create/rewrite front and back text
+                  </label>
+                  <label className="flex items-center gap-2">
                     <input type="checkbox" checked={imageAgentOverwrite} onChange={(event) => setImageAgentOverwrite(event.target.checked)} />
                     Overwrite existing images
                   </label>
@@ -1931,6 +2056,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                     <input type="checkbox" checked={imageAgentEmbed} onChange={(event) => setImageAgentEmbed(event.target.checked)} />
                     Download/embed images when possible
                   </label>
+                  <p className="text-xs text-muted-foreground">Agent-added images start centered with the existing crop controls set to neutral zoom/offset; you can still fine-tune each card manually.</p>
                 </div>
               </div>
             </div>
@@ -1950,11 +2076,11 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
             <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={() => onOpenGoogleSettings()}>
-                Google Search Settings
+                Search Settings
               </Button>
               <Button onClick={runImageAgent} disabled={imageAgentLoading || !imageAgentAcceptedRisk}>
                 <Sparkle className="mr-2" weight="bold" />
-                {imageAgentLoading ? 'Searching...' : 'Run Image Agent'}
+                {imageAgentLoading ? 'Working...' : 'Run Flashcard Agent'}
               </Button>
             </div>
 
@@ -1970,8 +2096,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       <Dialog open={imageSearchOpen} onOpenChange={setImageSearchOpen}>
         <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Search Google Images</DialogTitle>
-            <DialogDescription>Find an image and insert it directly into your flashcard.</DialogDescription>
+            <DialogTitle>Search Web Images</DialogTitle>
+            <DialogDescription>Find a real web image and insert it directly into your flashcard. Uses FlashForge web search first; Google Custom Search is optional.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="flex flex-col gap-2 sm:flex-row">
@@ -1982,11 +2108,11 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault()
-                    runGoogleImageSearch()
+                    runWebImageSearch()
                   }
                 }}
               />
-              <Button onClick={runGoogleImageSearch} disabled={imageSearchLoading} className="sm:w-auto">
+              <Button onClick={runWebImageSearch} disabled={imageSearchLoading} className="sm:w-auto">
                 <MagnifyingGlass className="mr-2" weight="bold" />
                 Search
               </Button>
@@ -1998,7 +2124,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                   <button
                     key={result.link}
                     className="text-left border rounded-lg overflow-hidden hover:border-primary transition-colors"
-                    onClick={() => handleSelectGoogleImage(result.link)}
+                    onClick={() => handleSelectWebImage(result.link)}
                     type="button"
                   >
                     <img
