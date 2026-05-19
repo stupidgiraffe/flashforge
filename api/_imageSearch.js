@@ -43,6 +43,62 @@ async function searchGoogle({ query, apiKey, cx, limit }) {
     .filter(Boolean)
 }
 
+
+function decodeHtml(value) {
+  return String(value || '')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+}
+
+async function searchBing({ query, limit }) {
+  const url = new URL('https://www.bing.com/images/search')
+  url.searchParams.set('q', query)
+  url.searchParams.set('form', 'HDRSC2')
+  url.searchParams.set('first', '1')
+  const response = await fetch(url, { headers: DEFAULT_HEADERS })
+  if (!response.ok) throw new Error(`Bing image search failed (${response.status})`)
+  const html = await response.text()
+  const results = []
+  const seen = new Set()
+
+  for (const match of html.matchAll(/m=\"([^\"]+)\"/g)) {
+    try {
+      const meta = JSON.parse(decodeHtml(match[1]))
+      const link = meta.murl || meta.imgurl
+      if (!link || seen.has(link)) continue
+      seen.add(link)
+      results.push(normalizeResult({
+        title: meta.t || 'Image result',
+        link,
+        thumbnailLink: meta.turl || link,
+        sourcePage: meta.purl,
+        provider: 'bing',
+      }))
+      if (results.length >= limit) break
+    } catch {}
+  }
+
+  if (results.length < limit) {
+    for (const match of html.matchAll(/&quot;murl&quot;:&quot;([^&]+)&quot;.*?&quot;turl&quot;:&quot;([^&]+)&quot;/g)) {
+      const link = decodeHtml(match[1])
+      if (!link || seen.has(link)) continue
+      seen.add(link)
+      results.push(normalizeResult({
+        title: 'Image result',
+        link,
+        thumbnailLink: decodeHtml(match[2]) || link,
+        provider: 'bing',
+      }))
+      if (results.length >= limit) break
+    }
+  }
+
+  return results.filter(Boolean).slice(0, limit)
+}
+
 async function searchDuckDuckGo({ query, limit }) {
   const landing = new URL('https://duckduckgo.com/')
   landing.searchParams.set('q', query)
@@ -84,15 +140,19 @@ export async function searchImages({ query, googleApiKey = '', googleCx = '', pr
     ? ['google']
     : provider === 'duckduckgo'
       ? ['duckduckgo']
+      : provider === 'bing'
+        ? ['bing']
       : googleApiKey && googleCx
-        ? ['google', 'duckduckgo']
-        : ['duckduckgo', 'google']
+        ? ['google', 'duckduckgo', 'bing']
+        : ['duckduckgo', 'bing', 'google']
 
   for (const current of providers) {
     try {
       const results = current === 'google'
         ? await searchGoogle({ query: trimmed, apiKey: googleApiKey, cx: googleCx, limit })
-        : await searchDuckDuckGo({ query: trimmed, limit })
+        : current === 'bing'
+          ? await searchBing({ query: trimmed, limit })
+          : await searchDuckDuckGo({ query: trimmed, limit })
       if (results.length > 0) return results.slice(0, limit)
     } catch (error) {
       errors.push(`${current}: ${error instanceof Error ? error.message : 'failed'}`)
