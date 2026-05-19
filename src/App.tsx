@@ -800,6 +800,27 @@ interface ImageSearchResult {
   thumbnailLink?: string
 }
 
+type ImageAgentTargetSide = 'front' | 'back' | 'both'
+
+interface ImageAgentCardRequest {
+  id: string
+  frontText: string
+  backText: string
+  query: string
+}
+
+interface ImageAgentResult {
+  cardId: string
+  query: string
+  title?: string
+  imageUrl?: string
+  dataUrl?: string
+  thumbnailLink?: string
+  sourcePage?: string
+  embedded?: boolean
+  error?: string
+}
+
 interface ImageCropEditorProps {
   imageUrl: string
   alt: string
@@ -980,6 +1001,14 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [imageSearchQuery, setImageSearchQuery] = useState('')
   const [imageSearchResults, setImageSearchResults] = useState<ImageSearchResult[]>([])
   const [imageSearchLoading, setImageSearchLoading] = useState(false)
+  const [imageAgentOpen, setImageAgentOpen] = useState(false)
+  const [imageAgentSide, setImageAgentSide] = useState<ImageAgentTargetSide>('front')
+  const [imageAgentQueryTemplate, setImageAgentQueryTemplate] = useState('{front} funny character clear image')
+  const [imageAgentEmbed, setImageAgentEmbed] = useState(false)
+  const [imageAgentOverwrite, setImageAgentOverwrite] = useState(false)
+  const [imageAgentAcceptedRisk, setImageAgentAcceptedRisk] = useState(false)
+  const [imageAgentLoading, setImageAgentLoading] = useState(false)
+  const [imageAgentLog, setImageAgentLog] = useState<string[]>([])
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const [previewContainerWidth, setPreviewContainerWidth] = useState(0)
   const previewObserverRef = useRef<ResizeObserver | null>(null)
@@ -1158,6 +1187,133 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     toast.success('Image inserted')
   }
 
+
+  function buildImageAgentQuery(card: FlashCard, side: ImageAgentTargetSide): string {
+    const front = card.frontText.trim()
+    const back = card.backText.trim()
+    const primary = side === 'back' ? back || front : front || back
+    const query = imageAgentQueryTemplate
+      .split('{front}').join(front)
+      .split('{back}').join(back)
+      .split('{title}').join(set.title)
+      .split('{side}').join(side)
+      .split('{text}').join(primary)
+      .replace(/\s+/g, ' ')
+      .trim()
+    return query || `${primary} ${set.title} clear classroom image`.trim()
+  }
+
+  function cardNeedsAgentImage(card: FlashCard): boolean {
+    if (imageAgentOverwrite) return true
+    if (imageAgentSide === 'front') return !card.frontImageUrl
+    if (imageAgentSide === 'back') return !card.backImageUrl
+    return !card.frontImageUrl || !card.backImageUrl
+  }
+
+  async function searchImagesClientSide(cards: ImageAgentCardRequest[]): Promise<ImageAgentResult[]> {
+    const results: ImageAgentResult[] = []
+    for (const card of cards) {
+      try {
+        const response = await fetch(`https://www.googleapis.com/customsearch/v1?searchType=image&safe=active&num=1&q=${encodeURIComponent(card.query)}&key=${encodeURIComponent(googleImageApiKey.trim())}&cx=${encodeURIComponent(googleImageSearchCx.trim())}`)
+        if (!response.ok) throw new Error(response.status === 429 ? 'rate limited' : 'search failed')
+        const data = await response.json() as { items?: Array<{ title?: string; link?: string; image?: { thumbnailLink?: string; contextLink?: string } }> }
+        const item = data.items?.find((entry) => entry.link)
+        results.push(item?.link
+          ? { cardId: card.id, query: card.query, title: item.title, imageUrl: item.link, thumbnailLink: item.image?.thumbnailLink, sourcePage: item.image?.contextLink }
+          : { cardId: card.id, query: card.query, error: 'No image found' })
+      } catch (error) {
+        results.push({ cardId: card.id, query: card.query, error: error instanceof Error ? error.message : 'Search failed' })
+      }
+    }
+    return results
+  }
+
+  async function runImageAgent() {
+    if (!googleImageApiKey.trim() || !googleImageSearchCx.trim()) {
+      toast.error('Set Google API key and Search Engine ID first')
+      onOpenGoogleSettings()
+      return
+    }
+    if (!imageAgentAcceptedRisk) {
+      toast.error('Please accept the image-use responsibility notice first')
+      return
+    }
+
+    const targetCards = set.cards.filter(cardNeedsAgentImage)
+    if (targetCards.length === 0) {
+      toast.message('No cards need images with the current settings')
+      return
+    }
+
+    const cards = targetCards.map((card): ImageAgentCardRequest => ({
+      id: card.id,
+      frontText: card.frontText,
+      backText: card.backText,
+      query: buildImageAgentQuery(card, imageAgentSide),
+    }))
+
+    try {
+      setImageAgentLoading(true)
+      setImageAgentLog([`Searching ${cards.length} card${cards.length === 1 ? '' : 's'}...`])
+      let results: ImageAgentResult[]
+
+      const response = await fetch('/api/image-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          apiKey: googleImageApiKey.trim(),
+          cx: googleImageSearchCx.trim(),
+          cards,
+          embedImages: imageAgentEmbed,
+        }),
+      })
+
+      if (response.ok) {
+        const data = await response.json() as { results?: ImageAgentResult[] }
+        results = data.results ?? []
+      } else {
+        results = await searchImagesClientSide(cards)
+      }
+
+      const resultByCard = new Map(results.filter((result) => result.dataUrl || result.imageUrl).map((result) => [result.cardId, result]))
+      updateSet(prev => ({
+        ...prev,
+        cards: prev.cards.map((card) => {
+          const result = resultByCard.get(card.id)
+          if (!result) return card
+          const imageUrl = result.dataUrl || result.imageUrl
+          if (!imageUrl) return card
+          const updates: Partial<FlashCard> = {}
+          if (imageAgentSide === 'front' || imageAgentSide === 'both') {
+            updates.frontImageUrl = imageUrl
+            updates.frontImageScale = 1
+            updates.frontImageOffsetX = 0
+            updates.frontImageOffsetY = 0
+          }
+          if (imageAgentSide === 'back' || imageAgentSide === 'both') {
+            updates.backImageUrl = imageUrl
+            updates.backImageScale = 1
+            updates.backImageOffsetX = 0
+            updates.backImageOffsetY = 0
+          }
+          return { ...card, ...updates }
+        }),
+      }))
+
+      const applied = resultByCard.size
+      const failed = results.length - applied
+      setImageAgentLog(results.map((result) => result.error
+        ? `✕ ${result.query}: ${result.error}`
+        : `✓ ${result.query}: ${result.title || result.imageUrl}${result.embedded ? ' (embedded)' : ''}`
+      ))
+      toast.success(`Image Agent applied ${applied} image${applied === 1 ? '' : 's'}${failed > 0 ? `; ${failed} failed` : ''}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Image Agent failed')
+    } finally {
+      setImageAgentLoading(false)
+    }
+  }
+
   function handleResetFormatting() {
     const confirmed = window.confirm('Reset all formatting options to default values?')
     if (!confirmed) return
@@ -1235,6 +1391,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         <Button variant="outline" onClick={() => setShowTestDialog(true)} disabled={set.cards.length === 0} className="shadow-sm">
           <Exam className="mr-2" weight="bold" />
           Generate Test
+        </Button>
+        <Button variant="outline" onClick={() => setImageAgentOpen(true)} disabled={set.cards.length === 0} className="shadow-sm">
+          <Sparkle className="mr-2" weight="bold" />
+          Image Agent
         </Button>
       </div>
 
@@ -1722,6 +1882,90 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           </TabsContent>
         )}
       </Tabs>
+
+      <Dialog open={imageAgentOpen} onOpenChange={setImageAgentOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Image Agent</DialogTitle>
+            <DialogDescription>
+              Bulk-search real web images for this set using your own Google Custom Search API key.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-5">
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+              FlashForge can help find and attach images, but you choose what to use. You assume responsibility for copyright, likeness, classroom appropriateness, and any other image-use risks.
+            </div>
+
+            <label className="flex items-start gap-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={imageAgentAcceptedRisk}
+                onChange={(event) => setImageAgentAcceptedRisk(event.target.checked)}
+              />
+              <span>I understand that I am responsible for the images I choose to search for, insert, print, share, or publish.</span>
+            </label>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="image-agent-side">Apply images to</Label>
+                <Select value={imageAgentSide} onValueChange={(value) => setImageAgentSide(value as ImageAgentTargetSide)}>
+                  <SelectTrigger id="image-agent-side">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="front">Front only</SelectItem>
+                    <SelectItem value="back">Back only</SelectItem>
+                    <SelectItem value="both">Front and back</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Options</Label>
+                <div className="space-y-2 rounded-md border p-3 text-sm">
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={imageAgentOverwrite} onChange={(event) => setImageAgentOverwrite(event.target.checked)} />
+                    Overwrite existing images
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={imageAgentEmbed} onChange={(event) => setImageAgentEmbed(event.target.checked)} />
+                    Download/embed images when possible
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="image-agent-query">Search query template</Label>
+              <Input
+                id="image-agent-query"
+                value={imageAgentQueryTemplate}
+                onChange={(event) => setImageAgentQueryTemplate(event.target.value)}
+                placeholder="{front} funny character clear image"
+              />
+              <p className="text-xs text-muted-foreground">
+                Variables: {'{front}'}, {'{back}'}, {'{text}'}, {'{title}'}, {'{side}'}. Example: {'{front} funny character Japanese students recognize'}.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button variant="outline" onClick={() => onOpenGoogleSettings()}>
+                Google Search Settings
+              </Button>
+              <Button onClick={runImageAgent} disabled={imageAgentLoading || !imageAgentAcceptedRisk}>
+                <Sparkle className="mr-2" weight="bold" />
+                {imageAgentLoading ? 'Searching...' : 'Run Image Agent'}
+              </Button>
+            </div>
+
+            {imageAgentLog.length > 0 && (
+              <div className="max-h-56 overflow-y-auto rounded-md border bg-muted/30 p-3 text-xs leading-relaxed">
+                {imageAgentLog.map((line, index) => <div key={`${line}-${index}`}>{line}</div>)}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={imageSearchOpen} onOpenChange={setImageSearchOpen}>
         <DialogContent className="sm:max-w-3xl">

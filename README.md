@@ -383,3 +383,26 @@ Built with:
 **Made for teachers, by teachers.** 🍎
 
 For questions, issues, or feature requests, please open an issue on GitHub.
+
+## BYOK Image Agent
+
+FlashForge includes an optional **Image Agent** for bulk image search. It uses the teacher's own Google Custom Search API key and Search Engine ID (`cx`) from Google Integrations, then applies results to the front, back, or both sides of cards.
+
+Key behavior:
+
+- BYOK only: FlashForge does not ship a shared image-search key.
+- User-controlled: the teacher chooses the query template, side selection, overwrite behavior, and whether to download/embed images when the serverless API is available.
+- Risk acknowledgement: the dialog requires the user to accept responsibility for copyright, likeness, classroom appropriateness, and other image-use risks before running.
+- Graceful fallback: if `/api/image-agent` is unavailable in local static/Vite mode, the app falls back to browser-side Google Custom Search and inserts image URLs.
+- Optional embedding: deployed Vercel/serverless mode can download image bytes and store data URLs in cards, subject to image host availability and size limits.
+
+Recommended query templates:
+
+```text
+{front} funny character clear image
+{front} real object classroom flashcard image
+{front} funny character Japanese students recognize
+{front} {back} ESL flashcard image
+```
+
+Template variables: `{front}`, `{back}`, `{text}`, `{title}`, and `{side}`.
