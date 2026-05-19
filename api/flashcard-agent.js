@@ -1,6 +1,6 @@
 import { embedImage, searchImages } from './_imageSearch.js'
 
-const MAX_CREATE_CARDS = 40
+const MAX_CREATE_CARDS = 50
 const MAX_EXISTING_CARDS = 80
 
 function json(res, status, body) {
@@ -42,8 +42,9 @@ async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instru
 
   const createCount = Math.max(1, Math.min(Number(count || 10), MAX_CREATE_CARDS))
   const existing = Array.isArray(existingCards) ? existingCards.slice(0, MAX_EXISTING_CARDS) : []
+  const existingSummary = existing.map((card) => `${card.frontText || ''} / ${card.backText || ''}`.trim()).filter(Boolean).slice(0, 120)
   const prompt = mode === 'create'
-    ? `Create ${createCount} classroom flashcards for the set "${title}". User instructions: ${instructions}`
+    ? `Create ${createCount} classroom flashcards for the set "${title}". User instructions: ${instructions}${existingSummary.length ? `\nAvoid duplicating these existing/generated cards:\n${existingSummary.join('\n')}` : ''}`
     : `Improve or complete these existing flashcards for the set "${title}". Keep the same ids. Fill missing or weak front/back text and create image search queries. User instructions: ${instructions}\nExisting cards:\n${JSON.stringify(existing.map((card) => ({ id: card.id, frontText: card.frontText, backText: card.backText })), null, 2)}`
 
   const response = await fetch(`${base}/chat/completions`, {

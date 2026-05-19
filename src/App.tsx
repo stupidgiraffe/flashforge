@@ -1013,8 +1013,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [imageSearchLoading, setImageSearchLoading] = useState(false)
   const [imageAgentOpen, setImageAgentOpen] = useState(false)
   const [flashcardAgentMode, setFlashcardAgentMode] = useState<FlashcardAgentMode>('enhance')
-  const [flashcardAgentInstructions, setFlashcardAgentInstructions] = useState('Create funny, classroom-safe ESL flashcards. Use short front text, useful back text, and specific real web image search queries.')
-  const [flashcardAgentCount, setFlashcardAgentCount] = useState('10')
+  const [flashcardAgentInstructions, setFlashcardAgentInstructions] = useState('Create a complete funny, classroom-safe ESL deck. Use short front text, useful back text, and specific real web image search queries for each side.')
+  const [flashcardAgentCount, setFlashcardAgentCount] = useState('120')
   const [flashcardAgentAiKey, setFlashcardAgentAiKey] = useState('')
   const [flashcardAgentBaseUrl, setFlashcardAgentBaseUrl] = useState('https://api.openai.com/v1')
   const [flashcardAgentModel, setFlashcardAgentModel] = useState('')
@@ -1261,29 +1261,40 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       setImageAgentLog([needsAi ? 'Asking the BYOK AI to create flashcard content...' : 'Searching web images for existing cards...'])
 
       if (needsAi) {
-        const response = await fetch('/api/flashcard-agent', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            mode: flashcardAgentMode,
-            title: set.title,
-            instructions: flashcardAgentInstructions,
-            count: Number(flashcardAgentCount || 10),
-            existingCards: set.cards,
-            aiApiKey: flashcardAgentAiKey.trim(),
-            aiBaseUrl: flashcardAgentBaseUrl.trim(),
-            aiModel: flashcardAgentModel.trim(),
-            includeImages: true,
-            imageSide: imageAgentSide,
-            imageProvider: 'auto',
-            googleApiKey: googleImageApiKey.trim(),
-            googleCx: googleImageSearchCx.trim(),
-            embedImages: imageAgentEmbed,
-          }),
-        })
-        const data = await response.json().catch(() => ({ error: 'Flashcard Agent failed' })) as { cards?: FlashcardAgentGeneratedCard[]; error?: string }
-        if (!response.ok) throw new Error(data.error || 'Flashcard Agent failed')
-        const generatedCards = data.cards ?? []
+        const requestedCount = Math.max(1, Math.min(Number(flashcardAgentCount || 120), 150))
+        const batchSize = flashcardAgentMode === 'create' ? 20 : requestedCount
+        const batchTotal = flashcardAgentMode === 'create' ? Math.ceil(requestedCount / batchSize) : 1
+        const generatedCards: FlashcardAgentGeneratedCard[] = []
+
+        for (let batchIndex = 0; batchIndex < batchTotal; batchIndex += 1) {
+          const batchCount = flashcardAgentMode === 'create' ? Math.min(batchSize, requestedCount - generatedCards.length) : requestedCount
+          setImageAgentLog((prev) => [...prev, `Batch ${batchIndex + 1}/${batchTotal}: generating ${batchCount} card${batchCount === 1 ? '' : 's'}...`])
+          const response = await fetch('/api/flashcard-agent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              mode: flashcardAgentMode,
+              title: set.title,
+              instructions: `${flashcardAgentInstructions}
+${flashcardAgentMode === 'create' ? `This is batch ${batchIndex + 1} of ${batchTotal}. Avoid duplicating these existing/generated cards.` : ''}`,
+              count: batchCount,
+              existingCards: [...set.cards, ...generatedCards],
+              aiApiKey: flashcardAgentAiKey.trim(),
+              aiBaseUrl: flashcardAgentBaseUrl.trim(),
+              aiModel: flashcardAgentModel.trim(),
+              includeImages: true,
+              imageSide: imageAgentSide,
+              imageProvider: 'auto',
+              googleApiKey: googleImageApiKey.trim(),
+              googleCx: googleImageSearchCx.trim(),
+              embedImages: imageAgentEmbed,
+            }),
+          })
+          const data = await response.json().catch(() => ({ error: 'Flashcard Agent failed' })) as { cards?: FlashcardAgentGeneratedCard[]; error?: string }
+          if (!response.ok) throw new Error(data.error || 'Flashcard Agent failed')
+          generatedCards.push(...(data.cards ?? []))
+        }
+
         if (generatedCards.length === 0) throw new Error('Flashcard Agent returned no cards')
 
         updateSet(prev => {
@@ -1332,8 +1343,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
         const imageNotes = generatedCards.flatMap((card) => card.imageSources ?? [])
         setImageAgentLog([
-          `✓ Generated ${generatedCards.length} flashcard${generatedCards.length === 1 ? '' : 's'}.`,
-          ...imageNotes.slice(0, 80).map((source) => source.error ? `✕ ${source.side}: ${source.query}: ${source.error}` : `✓ ${source.side}: ${source.query || source.title || source.url}${source.embedded ? ' (embedded)' : ''}`),
+          `✓ Generated ${generatedCards.length} flashcard${generatedCards.length === 1 ? '' : 's'} across ${batchTotal} batch${batchTotal === 1 ? '' : 'es'}.`,
+          ...imageNotes.slice(0, 120).map((source) => source.error ? `✕ ${source.side}: ${source.query}: ${source.error}` : `✓ ${source.side}: ${source.query || source.title || source.url}${source.embedded ? ' (embedded)' : ''}`),
         ])
         toast.success(`Flashcard Agent generated ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'}`)
         return
@@ -1972,7 +1983,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           <DialogHeader>
             <DialogTitle>Flashcard Agent</DialogTitle>
             <DialogDescription>
-              Create full flashcards with BYOK AI, then search/scrape real web images for the front and/or back.
+              Create full decks with BYOK AI: front text, back text, front/back image ideas, and real web images.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-5">
@@ -2002,8 +2013,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="flashcard-agent-count">New card count</Label>
-                <Input id="flashcard-agent-count" type="number" min="1" max="40" value={flashcardAgentCount} onChange={(event) => setFlashcardAgentCount(event.target.value)} />
+                <Label htmlFor="flashcard-agent-count">Deck size / new cards</Label>
+                <Input id="flashcard-agent-count" type="number" min="1" max="150" value={flashcardAgentCount} onChange={(event) => setFlashcardAgentCount(event.target.value)} />
               </div>
             </div>
 
@@ -2023,7 +2034,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               </div>
               <div className="space-y-2 sm:col-span-3">
                 <Label htmlFor="flashcard-agent-ai-key">BYOK AI API key</Label>
-                <Input id="flashcard-agent-ai-key" type="password" value={flashcardAgentAiKey} onChange={(event) => setFlashcardAgentAiKey(event.target.value)} placeholder="Only sent to your chosen provider when you run the agent" />
+                <Input id="flashcard-agent-ai-key" type="password" value={flashcardAgentAiKey} onChange={(event) => setFlashcardAgentAiKey(event.target.value)} placeholder="Required for full-deck AI generation; only sent to your chosen provider when you run the agent" />
               </div>
             </div>
 
