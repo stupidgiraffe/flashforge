@@ -1015,9 +1015,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [flashcardAgentMode, setFlashcardAgentMode] = useState<FlashcardAgentMode>('enhance')
   const [flashcardAgentInstructions, setFlashcardAgentInstructions] = useState('Create a complete funny, classroom-safe ESL deck. Use short front text, useful back text, and specific real web image search queries for each side.')
   const [flashcardAgentCount, setFlashcardAgentCount] = useState('120')
-  const [flashcardAgentAiKey, setFlashcardAgentAiKey] = useState('')
-  const [flashcardAgentBaseUrl, setFlashcardAgentBaseUrl] = useState('https://api.openai.com/v1')
-  const [flashcardAgentModel, setFlashcardAgentModel] = useState('')
+  const [flashcardAgentAiKey, setFlashcardAgentAiKey] = useState(() => localStorage.getItem('flashforge_byok_key') ?? '')
+  const [flashcardAgentBaseUrl, setFlashcardAgentBaseUrl] = useState(() => localStorage.getItem('flashforge_byok_base_url') ?? 'https://api.openai.com/v1')
+  const [flashcardAgentModel, setFlashcardAgentModel] = useState(() => localStorage.getItem('flashforge_byok_model') ?? '')
   const [flashcardAgentGenerateText, setFlashcardAgentGenerateText] = useState(true)
   const [imageAgentSide, setImageAgentSide] = useState<ImageAgentTargetSide>('both')
   const [imageAgentQueryTemplate, setImageAgentQueryTemplate] = useState('{front} funny character clear image')
@@ -1029,6 +1029,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const [previewContainerWidth, setPreviewContainerWidth] = useState(0)
   const previewObserverRef = useRef<ResizeObserver | null>(null)
+
+  useEffect(() => { localStorage.setItem('flashforge_byok_key', flashcardAgentAiKey) }, [flashcardAgentAiKey])
+  useEffect(() => { localStorage.setItem('flashforge_byok_base_url', flashcardAgentBaseUrl) }, [flashcardAgentBaseUrl])
+  useEffect(() => { localStorage.setItem('flashforge_byok_model', flashcardAgentModel) }, [flashcardAgentModel])
 
   const previewContainerRef = (el: HTMLDivElement | null) => {
     if (previewObserverRef.current) {
@@ -1168,7 +1172,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       if (!response.ok) {
         if (googleImageApiKey.trim() && googleImageSearchCx.trim()) {
           const fallback = await fetch(`https://www.googleapis.com/customsearch/v1?searchType=image&num=10&q=${encodeURIComponent(imageSearchQuery.trim())}&key=${encodeURIComponent(googleImageApiKey.trim())}&cx=${encodeURIComponent(googleImageSearchCx.trim())}`)
-          if (!fallback.ok) throw new Error('Image search failed')
+          if (!fallback.ok) {
+            toast.message("Couldn't find images — try a different keyword")
+            return
+          }
           const data = await fallback.json() as { items?: Array<{ title?: string; link?: string; image?: { thumbnailLink?: string } }> }
           const results = (data.items ?? [])
             .filter((item): item is { title?: string; link: string; image?: { thumbnailLink?: string } } => Boolean(item.link))
@@ -1177,8 +1184,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           if (results.length === 0) toast.message('No images found for this keyword')
           return
         }
-        const errorBody = await response.json().catch(() => ({ error: 'Image search failed' })) as { error?: string }
-        throw new Error(errorBody.error || 'Image search failed')
+        toast.message("Couldn't find images — try a different keyword")
+        return
       }
       const data = await response.json() as { results?: ImageSearchResult[] }
       const results = data.results ?? []
@@ -1242,6 +1249,11 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       }
     }
     return results
+  }
+
+  function openFlashcardAgent() {
+    if (set.cards.length === 0) setFlashcardAgentMode('create')
+    setImageAgentOpen(true)
   }
 
   async function runImageAgent() {
@@ -1487,9 +1499,9 @@ ${flashcardAgentMode === 'create' ? `This is batch ${batchIndex + 1} of ${batchT
           <Exam className="mr-2" weight="bold" />
           Generate Test
         </Button>
-        <Button variant="outline" onClick={() => setImageAgentOpen(true)} disabled={set.cards.length === 0} className="shadow-sm">
+        <Button variant="outline" onClick={openFlashcardAgent} className="shadow-sm">
           <Sparkle className="mr-2" weight="bold" />
-          Flashcard Agent
+          AI Flashcard Agent
         </Button>
       </div>
 
@@ -1981,9 +1993,9 @@ ${flashcardAgentMode === 'create' ? `This is batch ${batchIndex + 1} of ${batchT
       <Dialog open={imageAgentOpen} onOpenChange={setImageAgentOpen}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Flashcard Agent</DialogTitle>
+            <DialogTitle>AI Flashcard Agent (BYOK)</DialogTitle>
             <DialogDescription>
-              Create full decks with BYOK AI: front text, back text, front/back image ideas, and real web images.
+              Create full decks with your own AI key: front text, back text, front/back image ideas, and real web images.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-5">
