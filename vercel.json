@@ -3,6 +3,11 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "installCommand": "npm install",
+  "functions": {
+    "api/*.js": {
+      "maxDuration": 60
+    }
+  },
   "rewrites": [
     {
       "source": "/api/(.*)",

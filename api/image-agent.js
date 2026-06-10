@@ -1,4 +1,4 @@
-import { embedImage, searchImages } from './_imageSearch.js'
+import { embedImage, searchImages, resolveKeys } from './_imageSearch.js'
 
 const MAX_CARDS = 50
 
@@ -22,8 +22,13 @@ export default async function handler(req, res) {
 
   try {
     const body = await readBody(req)
-    const googleApiKey = String(body.apiKey || body.googleApiKey || '').trim()
-    const googleCx = String(body.cx || body.googleCx || '').trim()
+    const keys = resolveKeys({
+      braveApiKey: body.braveApiKey,
+      pixabayApiKey: body.pixabayApiKey,
+      pexelsApiKey: body.pexelsApiKey,
+      googleApiKey: body.googleApiKey || body.apiKey,
+      googleCx: body.googleCx || body.cx,
+    })
     const provider = body.provider || 'auto'
     const embedImages = Boolean(body.embedImages)
     const cards = Array.isArray(body.cards) ? body.cards.slice(0, MAX_CARDS) : []
@@ -38,7 +43,7 @@ export default async function handler(req, res) {
         continue
       }
       try {
-        const [found] = await searchImages({ query, googleApiKey, googleCx, provider, limit: 1 })
+        const [found] = await searchImages({ query, provider, limit: 1, keys })
         if (!found) {
           results.push({ cardId, query, error: 'No image found' })
           continue

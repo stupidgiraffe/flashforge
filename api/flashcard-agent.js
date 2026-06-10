@@ -1,7 +1,7 @@
-import { embedImage, searchImages } from './_imageSearch.js'
-
 const MAX_CREATE_CARDS = 50
-const MAX_EXISTING_CARDS = 80
+const MAX_EXISTING_FRONTS = 60
+const AI_TIMEOUT_MS = 50_000
+const AI_MAX_RETRIES = 2
 
 function json(res, status, body) {
   res.statusCode = status
@@ -24,9 +24,9 @@ function extractJson(text) {
   throw new Error('AI response was not valid JSON')
 }
 
-function normalizeGeneratedCard(raw, index, sourceId) {
+function normalizeGeneratedCard(raw, index) {
   return {
-    id: sourceId || `card-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+    id: `card-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
     frontText: String(raw.frontText || raw.front || '').trim(),
     backText: String(raw.backText || raw.back || '').trim(),
     frontImageQuery: String(raw.frontImageQuery || raw.imageQuery || raw.frontText || '').trim(),
@@ -34,95 +34,112 @@ function normalizeGeneratedCard(raw, index, sourceId) {
   }
 }
 
-async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instructions, count, existingCards }) {
+function classifyAiError(status, detail) {
+  if (status === 401) return 'AI authentication failed (401) \u2014 check your API key'
+  if (status === 403) return 'AI access denied (403) \u2014 check your API key permissions'
+  if (status === 429) return 'AI rate limit reached (429) \u2014 try again in a moment'
+  if (status === 400) {
+    if (detail && detail.toLowerCase().includes('model')) return 'AI model not found or invalid \u2014 check your model name'
+    return `AI bad request (400)${detail ? ': ' + detail.slice(0, 200) : ''}`
+  }
+  if (status >= 500) return `AI provider server error (${status}) \u2014 try again shortly`
+  return `AI provider failed (${status})${detail ? ': ' + detail.slice(0, 200) : ''}`
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instructions, count, existingFronts }) {
   const base = String(aiBaseUrl || 'https://api.openai.com/v1').replace(/\/$/, '')
   const model = String(aiModel || '').trim()
   if (!aiApiKey) throw new Error('Missing BYOK AI API key')
   if (!model) throw new Error('Missing AI model name')
 
   const createCount = Math.max(1, Math.min(Number(count || 10), MAX_CREATE_CARDS))
-  const existing = Array.isArray(existingCards) ? existingCards.slice(0, MAX_EXISTING_CARDS) : []
-  const existingSummary = existing.map((card) => `${card.frontText || ''} / ${card.backText || ''}`.trim()).filter(Boolean).slice(0, 120)
-  const prompt = mode === 'create'
-    ? `Create ${createCount} classroom flashcards for the set "${title}". User instructions: ${instructions}${existingSummary.length ? `\nAvoid duplicating these existing/generated cards:\n${existingSummary.join('\n')}` : ''}`
-    : `Improve or complete these existing flashcards for the set "${title}". Keep the same ids. Fill missing or weak front/back text and create image search queries. User instructions: ${instructions}\nExisting cards:\n${JSON.stringify(existing.map((card) => ({ id: card.id, frontText: card.frontText, backText: card.backText })), null, 2)}`
+  const fronts = Array.isArray(existingFronts)
+    ? existingFronts.filter(Boolean).slice(0, MAX_EXISTING_FRONTS)
+    : []
 
-  const response = await fetch(`${base}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${aiApiKey}`,
-    },
-    body: JSON.stringify({
+  const prompt = mode === 'create'
+    ? `Create ${createCount} classroom flashcards for the set "${title}". Instructions: ${instructions}${fronts.length ? '\nAvoid duplicating these fronts:\n' + fronts.join('\n') : ''}`
+    : `Improve/complete these flashcards for "${title}". Keep same ids. Fill missing text and add image search queries. Instructions: ${instructions}\nExisting fronts:\n${fronts.join('\n')}`
+
+  let lastError
+  let includeJsonFormat = true
+  let includeJsonFormat = true
+  for (let attempt = 0; attempt < AI_MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      await sleep(1500 * attempt)
+    }
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS)
+    // Build a fresh request body each attempt (avoid cross-attempt mutation)
+    const attemptBody = {
       model,
       temperature: 0.7,
+      max_tokens: 4096,
       messages: [
         {
           role: 'system',
-          content: 'You create ESL teacher flashcards. Return JSON only. Schema: {"cards":[{"id":"optional existing id","frontText":"short front text","backText":"short back text or answer/translation","frontImageQuery":"web image search query for front","backImageQuery":"web image search query for back"}]}. Make age-appropriate, concrete, printable cards. Prefer specific real-world or character/image search queries when requested. Do not include markdown.',
+          content: 'You are an ESL flashcard creator. Return JSON only \u2014 no markdown fences. Schema: {"cards":[{"frontText":"short front text","backText":"short back text or answer/translation","frontImageQuery":"specific web image search query for front","backImageQuery":"specific web image search query for back"}]}. Make age-appropriate, concrete, printable cards.',
         },
         { role: 'user', content: prompt },
       ],
-    }),
-  })
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '')
-    throw new Error(`AI provider failed (${response.status})${detail ? `: ${detail.slice(0, 240)}` : ''}`)
-  }
-  const data = await response.json()
-  const content = data.choices?.[0]?.message?.content
-  const parsed = extractJson(content)
-  const rawCards = Array.isArray(parsed.cards) ? parsed.cards : []
-  if (rawCards.length === 0) throw new Error('AI returned no cards')
-
-  return rawCards.slice(0, mode === 'create' ? createCount : MAX_EXISTING_CARDS).map((card, index) => {
-    const existingId = mode === 'enhance' ? String(card.id || existing[index]?.id || '') : undefined
-    return normalizeGeneratedCard(card, index, existingId)
-  }).filter((card) => card.frontText || card.backText)
-}
-
-async function attachImages({ cards, side, googleApiKey, googleCx, provider, embedImages }) {
-  const output = []
-  for (const card of cards) {
-    const next = {
-      ...card,
-      imagePosition: 'front',
-      frontImageScale: 1,
-      backImageScale: 1,
-      frontImageOffsetX: 0,
-      frontImageOffsetY: 0,
-      backImageOffsetX: 0,
-      backImageOffsetY: 0,
-      imageScale: 1,
-      imageSources: [],
+      ...(includeJsonFormat ? { response_format: { type: 'json_object' } } : {}),
     }
+    try {
+      const response = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + aiApiKey,
+        },
+        body: JSON.stringify(attemptBody),
+      })
 
-    for (const target of ['front', 'back']) {
-      if (side !== 'both' && side !== target) continue
-      const query = target === 'front' ? card.frontImageQuery : card.backImageQuery
-      if (!query) continue
-      try {
-        const [found] = await searchImages({ query, googleApiKey, googleCx, provider, limit: 1 })
-        if (!found) continue
-        let imageUrl = found.link
-        let embedded = false
-        if (embedImages) {
-          try {
-            imageUrl = await embedImage(found.link)
-            embedded = true
-          } catch {}
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '')
+        const msg = classifyAiError(response.status, detail)
+        if ((response.status === 429 || response.status >= 500) && attempt < AI_MAX_RETRIES - 1) {
+          lastError = new Error(msg)
+          continue
         }
-        if (target === 'front') next.frontImageUrl = imageUrl
-        else next.backImageUrl = imageUrl
-        next.imageSources.push({ side: target, query, title: found.title, url: found.link, sourcePage: found.sourcePage, provider: found.provider, embedded })
-      } catch (error) {
-        next.imageSources.push({ side: target, query, error: error instanceof Error ? error.message : 'image search failed' })
+        throw new Error(msg)
       }
+
+      const data = await response.json()
+      const content = data.choices?.[0]?.message?.content
+
+      let parsed
+      try {
+        parsed = extractJson(content)
+      } catch {
+        if (attempt < AI_MAX_RETRIES - 1) {
+          lastError = new Error('AI response was not valid JSON')
+          includeJsonFormat = false  // retry without response_format for non-supporting models
+          continue
+        }
+        throw new Error('AI response was not valid JSON \u2014 ensure your model supports JSON mode or try again')
+      }
+
+      const rawCards = Array.isArray(parsed.cards) ? parsed.cards : []
+      if (rawCards.length === 0) throw new Error('AI returned no cards \u2014 check your instructions and model')
+
+      return rawCards.slice(0, createCount).map((card, index) => normalizeGeneratedCard(card, index)).filter((card) => card.frontText || card.backText)
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        lastError = new Error(`AI request timed out after ${Math.round(AI_TIMEOUT_MS / 1000)}s \u2014 try a smaller batch or a faster model`)
+        if (attempt < AI_MAX_RETRIES - 1) continue
+      } else {
+        throw error
+      }
+    } finally {
+      clearTimeout(timer)
     }
-    output.push(next)
   }
-  return output
+  throw lastError || new Error('AI request failed after retries')
 }
 
 export default async function handler(req, res) {
@@ -133,28 +150,35 @@ export default async function handler(req, res) {
 
   try {
     const body = await readBody(req)
-    const generated = await completeCards({
+
+    // Support both compact fronts list (new) and full existingCards (legacy compatibility)
+    let existingFronts = []
+    if (Array.isArray(body.existingFronts)) {
+      existingFronts = body.existingFronts.filter(Boolean).slice(0, MAX_EXISTING_FRONTS)
+    } else if (Array.isArray(body.existingCards)) {
+      existingFronts = body.existingCards
+        .map((c) => String(c?.frontText || '').trim())
+        .filter(Boolean)
+        .slice(0, MAX_EXISTING_FRONTS)
+    }
+
+    const cards = await completeCards({
       aiApiKey: String(body.aiApiKey || '').trim(),
       aiBaseUrl: String(body.aiBaseUrl || '').trim(),
       aiModel: String(body.aiModel || '').trim(),
       mode: body.mode === 'enhance' ? 'enhance' : 'create',
       title: String(body.title || 'Flashcards'),
-      instructions: String(body.instructions || ''),
+      instructions: String(body.instructions || '').slice(0, 2000),
       count: Number(body.count || 10),
-      existingCards: body.existingCards,
-    })
-
-    const cards = body.includeImages === false ? generated : await attachImages({
-      cards: generated,
-      side: body.imageSide === 'front' || body.imageSide === 'back' ? body.imageSide : 'both',
-      googleApiKey: String(body.googleApiKey || '').trim(),
-      googleCx: String(body.googleCx || '').trim(),
-      provider: body.imageProvider || 'auto',
-      embedImages: Boolean(body.embedImages),
+      existingFronts,
     })
 
     return json(res, 200, { cards })
   } catch (error) {
-    return json(res, 500, { error: error instanceof Error ? error.message : 'Flashcard Agent failed' })
+    const msg = error instanceof Error ? error.message : 'Flashcard Agent failed'
+    const status = (msg.includes('401') || msg.includes('authentication') || msg.includes('API key')) ? 401
+      : (msg.includes('429') || msg.includes('rate limit')) ? 429
+        : 500
+    return json(res, status, { error: msg })
   }
 }
