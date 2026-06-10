@@ -344,3 +344,50 @@ Or use your browser's "Clear browsing data" feature (select "Cookies and site da
 **Happy Teaching! 🎓**
 
 Made with ❤️ for teachers who want to spend less time on busywork and more time teaching.
+
+## AI Flashcard Agent (BYOK)
+
+### Overview
+
+The **Flashcard Agent** creates full decks with text and real web images. It runs in two decoupled phases so the UI stays responsive, shows live progress, and can be cancelled at any time.
+
+### Usage
+
+1. Open any set (or create a new empty one)
+2. Click **Flashcard Agent** in the editor toolbar
+3. Accept the image-use responsibility notice
+4. Choose **Create new cards** (empty set) or **Enhance current cards**
+5. Enter your AI credentials (model, base URL, API key) — see README for supported providers
+6. Open **Image Search Settings** to configure at least one image provider
+7. Click **Run Flashcard Agent**
+
+### Progress & Cancel
+
+- A progress bar shows Phase 1 ("Generating text… X/Y") then Phase 2 ("Searching images… X/Y")
+- Click **Cancel** at any time to stop; cards and images already fetched are preserved
+- Cards appear in the set immediately after Phase 1, before images are attached
+
+### Image Search Settings
+
+Open via the **Image Search Settings** button in the agent dialog or web image search dialog. From there you can:
+
+- Choose provider: **Auto** (recommended), Brave, Pixabay, Pexels, Google, or Openverse
+- Enter per-provider API keys (stored in localStorage, never sent anywhere else)
+- See **"Server configured ✓"** badges if an admin has configured keys via environment variables
+
+**Openverse requires no key** and is always available as a Creative Commons fallback. Auto mode tries all configured providers in priority order.
+
+### Web Image Search
+
+The **Search Web Images** dialog (accessible from the image icon on any card) also uses the provider registry. Click **Settings** in that dialog to open Image Search Settings. If no results appear, try a different keyword or add a provider key.
+
+### Image Embedding
+
+Images are embedded (downloaded + stored as base-64 data URLs) by default so printed PDFs never show broken images. They are compressed to ≤ 1000 px / JPEG 0.75 client-side. Uncheck "Download/embed images" in the agent options to store hotlink URLs instead (smaller storage, but URLs may expire).
+
+### Error Handling
+
+- **Auth failure** (401/403): check your AI API key and base URL
+- **Rate limit** (429): the agent retries once automatically with backoff; if it persists, wait and retry
+- **No images found**: the card is still created without an image; configure a provider with a key for better coverage
+- **Timeout**: text-generation batches time out after 55 s; reduce deck size or switch to a faster model

@@ -1,4 +1,4 @@
-import { searchImages } from './_imageSearch.js'
+import { searchImages, embedImage, resolveKeys } from './_imageSearch.js'
 
 function json(res, status, body) {
   res.statusCode = status
@@ -19,13 +19,33 @@ export default async function handler(req, res) {
   }
   try {
     const body = await readBody(req)
-    const results = await searchImages({
-      query: body.query,
-      googleApiKey: String(body.googleApiKey || '').trim(),
-      googleCx: String(body.googleCx || '').trim(),
-      provider: body.provider || 'auto',
-      limit: Number(body.limit || 10),
+    const keys = resolveKeys({
+      braveApiKey: body.braveApiKey,
+      pixabayApiKey: body.pixabayApiKey,
+      pexelsApiKey: body.pexelsApiKey,
+      googleApiKey: body.googleApiKey,
+      googleCx: body.googleCx,
     })
+    const query = String(body.query || '').trim()
+    if (!query) return json(res, 400, { error: 'query is required' })
+
+    const results = await searchImages({
+      query,
+      provider: body.provider || 'auto',
+      limit: Math.min(Number(body.limit || 10), 20),
+      keys,
+    })
+
+    // Optional single-image embed (used by the agent Phase 2)
+    if (body.embedImage && results.length > 0) {
+      try {
+        const dataUrl = await embedImage(results[0].link)
+        return json(res, 200, { results, dataUrl, embedded: true })
+      } catch {
+        // Embed failed; return link-only result
+      }
+    }
+
     return json(res, 200, { results })
   } catch (error) {
     return json(res, 500, { error: error instanceof Error ? error.message : 'Image search failed' })

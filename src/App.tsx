@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
 import type { CSSProperties, PointerEventHandler, WheelEventHandler } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus, Printer, DownloadSimple, UploadSimple, Exam, Image as ImageIcon, Trash, ArrowLeft, DotsThreeVertical, Copy, Sparkle, Stack, CloudArrowUp, CloudArrowDown, LinkSimple, MagnifyingGlass } from '@phosphor-icons/react'
+import { Plus, Printer, DownloadSimple, UploadSimple, Exam, Image as ImageIcon, Trash, ArrowLeft, DotsThreeVertical, Copy, Sparkle, Stack, CloudArrowUp, CloudArrowDown, LinkSimple, MagnifyingGlass, X, Gear, CheckCircle } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Progress } from '@/components/ui/progress'
 import { Slider } from '@/components/ui/slider'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -1014,18 +1015,29 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [imageAgentOpen, setImageAgentOpen] = useState(false)
   const [flashcardAgentMode, setFlashcardAgentMode] = useState<FlashcardAgentMode>('enhance')
   const [flashcardAgentInstructions, setFlashcardAgentInstructions] = useState('Create a complete funny, classroom-safe ESL deck. Use short front text, useful back text, and specific real web image search queries for each side.')
-  const [flashcardAgentCount, setFlashcardAgentCount] = useState('120')
+  const [flashcardAgentCount, setFlashcardAgentCount] = useState('24')
   const [flashcardAgentAiKey, setFlashcardAgentAiKey] = useState(() => localStorage.getItem('flashforge_byok_key') ?? '')
   const [flashcardAgentBaseUrl, setFlashcardAgentBaseUrl] = useState(() => localStorage.getItem('flashforge_byok_base_url') ?? 'https://api.openai.com/v1')
   const [flashcardAgentModel, setFlashcardAgentModel] = useState(() => localStorage.getItem('flashforge_byok_model') ?? '')
   const [flashcardAgentGenerateText, setFlashcardAgentGenerateText] = useState(true)
   const [imageAgentSide, setImageAgentSide] = useState<ImageAgentTargetSide>('both')
   const [imageAgentQueryTemplate, setImageAgentQueryTemplate] = useState('{front} funny character clear image')
-  const [imageAgentEmbed, setImageAgentEmbed] = useState(false)
+  const [imageAgentEmbed, setImageAgentEmbed] = useState(true)
   const [imageAgentOverwrite, setImageAgentOverwrite] = useState(false)
   const [imageAgentAcceptedRisk, setImageAgentAcceptedRisk] = useState(false)
   const [imageAgentLoading, setImageAgentLoading] = useState(false)
   const [imageAgentLog, setImageAgentLog] = useState<string[]>([])
+  const [imageAgentProgress, setImageAgentProgress] = useState<{ phase: 'text' | 'images'; done: number; total: number } | null>(null)
+  const imageAgentCancelRef = useRef<(() => void) | null>(null)
+  // Image search provider settings (persisted)
+  const [imageBraveKey, setImageBraveKey] = useState(() => localStorage.getItem('flashforge_brave_key') ?? '')
+  const [imagePixabayKey, setImagePixabayKey] = useState(() => localStorage.getItem('flashforge_pixabay_key') ?? '')
+  const [imagePexelsKey, setImagePexelsKey] = useState(() => localStorage.getItem('flashforge_pexels_key') ?? '')
+  const [imageGoogleKey, setImageGoogleKey] = useState(() => localStorage.getItem('flashforge_google_image_key') ?? '')
+  const [imageGoogleCx, setImageGoogleCx] = useState(() => localStorage.getItem('flashforge_google_cx') ?? '')
+  const [imageProvider, setImageProvider] = useState(() => localStorage.getItem('flashforge_image_provider') ?? 'auto')
+  const [imageSearchSettingsOpen, setImageSearchSettingsOpen] = useState(false)
+  const [serverSearchConfig, setServerSearchConfig] = useState<Record<string, boolean> | null>(null)
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const [previewContainerWidth, setPreviewContainerWidth] = useState(0)
   const previewObserverRef = useRef<ResizeObserver | null>(null)
@@ -1033,6 +1045,21 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   useEffect(() => { localStorage.setItem('flashforge_byok_key', flashcardAgentAiKey) }, [flashcardAgentAiKey])
   useEffect(() => { localStorage.setItem('flashforge_byok_base_url', flashcardAgentBaseUrl) }, [flashcardAgentBaseUrl])
   useEffect(() => { localStorage.setItem('flashforge_byok_model', flashcardAgentModel) }, [flashcardAgentModel])
+  useEffect(() => { localStorage.setItem('flashforge_brave_key', imageBraveKey) }, [imageBraveKey])
+  useEffect(() => { localStorage.setItem('flashforge_pixabay_key', imagePixabayKey) }, [imagePixabayKey])
+  useEffect(() => { localStorage.setItem('flashforge_pexels_key', imagePexelsKey) }, [imagePexelsKey])
+  useEffect(() => { localStorage.setItem('flashforge_google_image_key', imageGoogleKey) }, [imageGoogleKey])
+  useEffect(() => { localStorage.setItem('flashforge_google_cx', imageGoogleCx) }, [imageGoogleCx])
+  useEffect(() => { localStorage.setItem('flashforge_image_provider', imageProvider) }, [imageProvider])
+
+  // Fetch server-side provider config when the Image Search Settings dialog opens
+  useEffect(() => {
+    if (!imageSearchSettingsOpen || serverSearchConfig !== null) return
+    fetch('/api/search-config')
+      .then((r) => r.ok ? r.json() : null)
+      .then((data: Record<string, boolean> | null) => { if (data) setServerSearchConfig(data) })
+      .catch(() => { /* ignore — server config unavailable */ })
+  }, [imageSearchSettingsOpen, serverSearchConfig])
 
   const previewContainerRef = (el: HTMLDivElement | null) => {
     if (previewObserverRef.current) {
@@ -1158,41 +1185,42 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
     try {
       setImageSearchLoading(true)
-      const response = await fetch('/api/image-search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: imageSearchQuery.trim(),
-          googleApiKey: googleImageApiKey.trim(),
-          googleCx: googleImageSearchCx.trim(),
-          provider: 'auto',
-          limit: 10,
-        }),
-      })
-      if (!response.ok) {
-        if (googleImageApiKey.trim() && googleImageSearchCx.trim()) {
-          const fallback = await fetch(`https://www.googleapis.com/customsearch/v1?searchType=image&num=10&q=${encodeURIComponent(imageSearchQuery.trim())}&key=${encodeURIComponent(googleImageApiKey.trim())}&cx=${encodeURIComponent(googleImageSearchCx.trim())}`)
-          if (!fallback.ok) {
-            toast.message("Couldn't find images — try a different keyword")
-            return
-          }
-          const data = await fallback.json() as { items?: Array<{ title?: string; link?: string; image?: { thumbnailLink?: string } }> }
-          const results = (data.items ?? [])
-            .filter((item): item is { title?: string; link: string; image?: { thumbnailLink?: string } } => Boolean(item.link))
-            .map((item) => ({ title: item.title ?? 'Image result', link: item.link, thumbnailLink: item.image?.thumbnailLink }))
-          setImageSearchResults(results)
-          if (results.length === 0) toast.message('No images found for this keyword')
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 30_000)
+      try {
+        const response = await fetch('/api/image-search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            query: imageSearchQuery.trim(),
+            braveApiKey: imageBraveKey.trim(),
+            pixabayApiKey: imagePixabayKey.trim(),
+            pexelsApiKey: imagePexelsKey.trim(),
+            googleApiKey: imageGoogleKey.trim() || googleImageApiKey.trim(),
+            googleCx: imageGoogleCx.trim() || googleImageSearchCx.trim(),
+            provider: imageProvider,
+            limit: 10,
+          }),
+        })
+        clearTimeout(timer)
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({ error: 'Image search failed' })) as { error?: string }
+          toast.message(err.error || "Couldn't find images — try a different keyword or configure a provider in Image Search Settings")
           return
         }
-        toast.message("Couldn't find images — try a different keyword")
-        return
+        const data = await response.json() as { results?: ImageSearchResult[] }
+        const results = data.results ?? []
+        setImageSearchResults(results)
+        if (results.length === 0) toast.message('No images found — try a different keyword or configure a provider in Image Search Settings')
+      } catch (error) {
+        clearTimeout(timer)
+        if ((error as Error).name === 'AbortError') {
+          toast.error('Image search timed out — try a different keyword')
+        } else {
+          toast.error(error instanceof Error ? error.message : 'Failed to search images')
+        }
       }
-      const data = await response.json() as { results?: ImageSearchResult[] }
-      const results = data.results ?? []
-      setImageSearchResults(results)
-      if (results.length === 0) toast.message('No images found for this keyword')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to search images')
     } finally {
       setImageSearchLoading(false)
     }
@@ -1233,27 +1261,62 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     return !card.frontImageUrl || !card.backImageUrl
   }
 
-  async function searchImagesClientSide(cards: ImageAgentCardRequest[]): Promise<ImageAgentResult[]> {
-    const results: ImageAgentResult[] = []
-    for (const card of cards) {
-      try {
-        const response = await fetch(`https://www.googleapis.com/customsearch/v1?searchType=image&safe=active&num=1&q=${encodeURIComponent(card.query)}&key=${encodeURIComponent(googleImageApiKey.trim())}&cx=${encodeURIComponent(googleImageSearchCx.trim())}`)
-        if (!response.ok) throw new Error(response.status === 429 ? 'rate limited' : 'search failed')
-        const data = await response.json() as { items?: Array<{ title?: string; link?: string; image?: { thumbnailLink?: string; contextLink?: string } }> }
-        const item = data.items?.find((entry) => entry.link)
-        results.push(item?.link
-          ? { cardId: card.id, query: card.query, title: item.title, imageUrl: item.link, thumbnailLink: item.image?.thumbnailLink, sourcePage: item.image?.contextLink }
-          : { cardId: card.id, query: card.query, error: 'No image found' })
-      } catch (error) {
-        results.push({ cardId: card.id, query: card.query, error: error instanceof Error ? error.message : 'Search failed' })
-      }
-    }
-    return results
-  }
-
   function openFlashcardAgent() {
     if (set.cards.length === 0) setFlashcardAgentMode('create')
     setImageAgentOpen(true)
+  }
+
+  function getImageSearchKeys() {
+    return {
+      braveApiKey: imageBraveKey.trim(),
+      pixabayApiKey: imagePixabayKey.trim(),
+      pexelsApiKey: imagePexelsKey.trim(),
+      // fall back to the legacy Google fields from the Google Integrations dialog
+      googleApiKey: imageGoogleKey.trim() || googleImageApiKey.trim(),
+      googleCx: imageGoogleCx.trim() || googleImageSearchCx.trim(),
+    }
+  }
+
+  async function fetchImageForQuery(
+    query: string,
+    signal: AbortSignal,
+  ): Promise<{ imageUrl: string; embedded: boolean; title?: string } | null> {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 25_000)
+    // Combine external signal with per-request timeout
+    const combined = AbortSignal.any ? AbortSignal.any([signal, controller.signal]) : signal
+    try {
+      const response = await fetch('/api/image-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: combined,
+        body: JSON.stringify({
+          query: query.trim(),
+          ...getImageSearchKeys(),
+          provider: imageProvider,
+          limit: 1,
+          embedImage: imageAgentEmbed,
+        }),
+      })
+      clearTimeout(timeoutId)
+      if (!response.ok) return null
+      const data = await response.json() as { results?: Array<{ link: string; title?: string }>; dataUrl?: string; embedded?: boolean }
+      const result = data.results?.[0]
+      if (!result?.link && !data.dataUrl) return null
+      let imageUrl = data.dataUrl || result!.link
+      let embedded = Boolean(data.embedded)
+      // Client-side compress if it's a data URL (from server embed) — keeps localStorage small
+      if (imageUrl.startsWith('data:') && !imageUrl.startsWith('data:image/gif')) {
+        try {
+          imageUrl = await compressImage(imageUrl, 1000, 0.75)
+          embedded = true
+        } catch { /* keep original */ }
+      }
+      return { imageUrl, embedded, title: result?.title }
+    } catch {
+      clearTimeout(timeoutId)
+      return null
+    }
   }
 
   async function runImageAgent() {
@@ -1268,48 +1331,66 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       return
     }
 
+    const abortController = new AbortController()
+    imageAgentCancelRef.current = () => abortController.abort()
+
     try {
       setImageAgentLoading(true)
-      setImageAgentLog([needsAi ? 'Asking the BYOK AI to create flashcard content...' : 'Searching web images for existing cards...'])
+      setImageAgentLog([])
+      setImageAgentProgress(null)
+
+      // ── Phase 1: Text generation (batched) ──────────────────────────────
+      let generatedCards: FlashcardAgentGeneratedCard[] = []
 
       if (needsAi) {
-        const requestedCount = Math.max(1, Math.min(Number(flashcardAgentCount || 120), 150))
-        const batchSize = flashcardAgentMode === 'create' ? 20 : requestedCount
+        const requestedCount = Math.max(1, Math.min(Number(flashcardAgentCount || 24), 60))
+        const batchSize = 20
         const batchTotal = flashcardAgentMode === 'create' ? Math.ceil(requestedCount / batchSize) : 1
-        const generatedCards: FlashcardAgentGeneratedCard[] = []
+
+        setImageAgentProgress({ phase: 'text', done: 0, total: batchTotal })
+        setImageAgentLog([`Generating text for ${requestedCount} card${requestedCount === 1 ? '' : 's'} (${batchTotal} batch${batchTotal === 1 ? '' : 'es'})...`])
 
         for (let batchIndex = 0; batchIndex < batchTotal; batchIndex += 1) {
+          if (abortController.signal.aborted) break
           const batchCount = flashcardAgentMode === 'create' ? Math.min(batchSize, requestedCount - generatedCards.length) : requestedCount
           setImageAgentLog((prev) => [...prev, `Batch ${batchIndex + 1}/${batchTotal}: generating ${batchCount} card${batchCount === 1 ? '' : 's'}...`])
-          const response = await fetch('/api/flashcard-agent', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              mode: flashcardAgentMode,
-              title: set.title,
-              instructions: `${flashcardAgentInstructions}
-${flashcardAgentMode === 'create' ? `This is batch ${batchIndex + 1} of ${batchTotal}. Avoid duplicating these existing/generated cards.` : ''}`,
-              count: batchCount,
-              existingCards: [...set.cards, ...generatedCards],
-              aiApiKey: flashcardAgentAiKey.trim(),
-              aiBaseUrl: flashcardAgentBaseUrl.trim(),
-              aiModel: flashcardAgentModel.trim(),
-              includeImages: true,
-              imageSide: imageAgentSide,
-              imageProvider: 'auto',
-              googleApiKey: googleImageApiKey.trim(),
-              googleCx: googleImageSearchCx.trim(),
-              embedImages: imageAgentEmbed,
-            }),
-          })
-          const data = await response.json().catch(() => ({ error: 'Flashcard Agent failed' })) as { cards?: FlashcardAgentGeneratedCard[]; error?: string }
-          if (!response.ok) throw new Error(data.error || 'Flashcard Agent failed')
-          generatedCards.push(...(data.cards ?? []))
+
+          const batchController = new AbortController()
+          const batchTimer = setTimeout(() => batchController.abort(), 55_000)
+          try {
+            const response = await fetch('/api/flashcard-agent', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              signal: batchController.signal,
+              body: JSON.stringify({
+                mode: flashcardAgentMode,
+                title: set.title,
+                instructions: flashcardAgentInstructions,
+                count: batchCount,
+                existingFronts: [...set.cards, ...generatedCards].map((c) => c.frontText).filter(Boolean).slice(0, 60),
+                aiApiKey: flashcardAgentAiKey.trim(),
+                aiBaseUrl: flashcardAgentBaseUrl.trim(),
+                aiModel: flashcardAgentModel.trim(),
+              }),
+            })
+            clearTimeout(batchTimer)
+            const data = await response.json().catch(() => ({ error: 'Flashcard Agent failed' })) as { cards?: FlashcardAgentGeneratedCard[]; error?: string }
+            if (!response.ok) throw new Error(data.error || 'Flashcard Agent failed')
+            generatedCards.push(...(data.cards ?? []))
+            setImageAgentProgress({ phase: 'text', done: batchIndex + 1, total: batchTotal })
+          } catch (error) {
+            clearTimeout(batchTimer)
+            if ((error as Error).name === 'AbortError') throw new Error('Text generation timed out — try a smaller deck or faster model')
+            throw error
+          }
         }
 
         if (generatedCards.length === 0) throw new Error('Flashcard Agent returned no cards')
 
-        updateSet(prev => {
+        setImageAgentLog((prev) => [...prev, `✓ Generated ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} — now searching for images...`])
+
+        // Add text-only cards to the set immediately so user sees progress
+        updateSet((prev) => {
           if (flashcardAgentMode === 'create') {
             return {
               ...prev,
@@ -1317,8 +1398,6 @@ ${flashcardAgentMode === 'create' ? `This is batch ${batchIndex + 1} of ${batchT
                 id: card.id,
                 frontText: card.frontText,
                 backText: card.backText,
-                frontImageUrl: card.frontImageUrl,
-                backImageUrl: card.backImageUrl,
                 imagePosition: 'front' as const,
                 frontImageScale: 1,
                 backImageScale: 1,
@@ -1330,94 +1409,152 @@ ${flashcardAgentMode === 'create' ? `This is batch ${batchIndex + 1} of ${batchT
               }))],
             }
           }
-          const byId = new Map(generatedCards.map((card) => [card.id, card]))
+          const byId = new Map(generatedCards.map((c) => [c.id, c]))
           return {
             ...prev,
             cards: prev.cards.map((card) => {
-              const generated = byId.get(card.id)
-              if (!generated) return card
-              return {
-                ...card,
-                frontText: generated.frontText || card.frontText,
-                backText: generated.backText || card.backText,
-                frontImageUrl: generated.frontImageUrl || card.frontImageUrl,
-                backImageUrl: generated.backImageUrl || card.backImageUrl,
-                frontImageScale: 1,
-                backImageScale: 1,
-                frontImageOffsetX: 0,
-                frontImageOffsetY: 0,
-                backImageOffsetX: 0,
-                backImageOffsetY: 0,
-              }
+              const gen = byId.get(card.id)
+              if (!gen) return card
+              return { ...card, frontText: gen.frontText || card.frontText, backText: gen.backText || card.backText }
             }),
           }
         })
-
-        const imageNotes = generatedCards.flatMap((card) => card.imageSources ?? [])
-        setImageAgentLog([
-          `✓ Generated ${generatedCards.length} flashcard${generatedCards.length === 1 ? '' : 's'} across ${batchTotal} batch${batchTotal === 1 ? '' : 'es'}.`,
-          ...imageNotes.slice(0, 120).map((source) => source.error ? `✕ ${source.side}: ${source.query}: ${source.error}` : `✓ ${source.side}: ${source.query || source.title || source.url}${source.embedded ? ' (embedded)' : ''}`),
-        ])
-        toast.success(`Flashcard Agent generated ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'}`)
-        return
       }
 
-      const targetCards = set.cards.filter(cardNeedsAgentImage)
-      if (targetCards.length === 0) {
-        toast.message('No cards need images with the current settings')
-        return
-      }
-      const cards = targetCards.map((card): ImageAgentCardRequest => ({
-        id: card.id,
-        frontText: card.frontText,
-        backText: card.backText,
-        query: buildImageAgentQuery(card, imageAgentSide),
-      }))
-      const response = await fetch('/api/image-agent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          googleApiKey: googleImageApiKey.trim(),
-          googleCx: googleImageSearchCx.trim(),
-          provider: 'auto',
-          cards,
-          embedImages: imageAgentEmbed,
-        }),
-      })
-      const data = await response.json().catch(() => ({ results: [], error: 'Flashcard Agent failed' })) as { results?: ImageAgentResult[]; error?: string }
-      if (!response.ok) throw new Error(data.error || 'Flashcard Agent failed')
-      const results = data.results ?? []
-      const resultByCard = new Map(results.filter((result) => result.dataUrl || result.imageUrl).map((result) => [result.cardId, result]))
-      updateSet(prev => ({
-        ...prev,
-        cards: prev.cards.map((card) => {
-          const result = resultByCard.get(card.id)
-          const imageUrl = result?.dataUrl || result?.imageUrl
-          if (!imageUrl) return card
-          const updates: Partial<FlashCard> = {}
+      // ── Phase 2: Image search (client-orchestrated, bounded concurrency) ─
+      interface ImageTask { cardId: string; side: 'front' | 'back'; query: string }
+      const imageTasks: ImageTask[] = []
+
+      if (needsAi) {
+        // Build tasks from generated cards
+        for (const card of generatedCards) {
+          if (abortController.signal.aborted) break
           if (imageAgentSide === 'front' || imageAgentSide === 'both') {
-            updates.frontImageUrl = imageUrl
-            updates.frontImageScale = 1
-            updates.frontImageOffsetX = 0
-            updates.frontImageOffsetY = 0
+            const query = card.frontImageQuery || card.frontText
+            if (query) imageTasks.push({ cardId: card.id, side: 'front', query })
           }
           if (imageAgentSide === 'back' || imageAgentSide === 'both') {
-            updates.backImageUrl = imageUrl
-            updates.backImageScale = 1
-            updates.backImageOffsetX = 0
-            updates.backImageOffsetY = 0
+            const query = card.backImageQuery || card.backText
+            if (query) imageTasks.push({ cardId: card.id, side: 'back', query })
           }
-          return { ...card, ...updates }
-        }),
-      }))
-      const applied = resultByCard.size
-      const failed = results.length - applied
-      setImageAgentLog(results.map((result) => result.error ? `✕ ${result.query}: ${result.error}` : `✓ ${result.query}: ${result.title || result.imageUrl}${result.embedded ? ' (embedded)' : ''}`))
-      toast.success(`Flashcard Agent applied ${applied} image${applied === 1 ? '' : 's'}${failed > 0 ? `; ${failed} failed` : ''}`)
+        }
+      } else {
+        // Image-only mode: get tasks from existing cards that need images
+        const targetCards = set.cards.filter(cardNeedsAgentImage)
+        if (targetCards.length === 0) {
+          toast.message('No cards need images with the current settings')
+          return
+        }
+        for (const card of targetCards) {
+          if (imageAgentSide === 'front' || imageAgentSide === 'both') {
+            if (!card.frontImageUrl || imageAgentOverwrite) {
+              imageTasks.push({ cardId: card.id, side: 'front', query: buildImageAgentQuery(card, 'front') })
+            }
+          }
+          if (imageAgentSide === 'back' || imageAgentSide === 'both') {
+            if (!card.backImageUrl || imageAgentOverwrite) {
+              imageTasks.push({ cardId: card.id, side: 'back', query: buildImageAgentQuery(card, 'back') })
+            }
+          }
+        }
+      }
+
+      if (imageTasks.length > 0) {
+        setImageAgentProgress({ phase: 'images', done: 0, total: imageTasks.length })
+
+        const IMAGE_CONCURRENCY = 4
+        let imagesDone = 0
+        let imagesApplied = 0
+        let imagesFailed = 0
+
+        // Collect results to apply in batch
+        const pendingUpdates: Array<{ cardId: string; side: 'front' | 'back'; imageUrl: string }> = []
+
+        async function processImageTask(task: ImageTask) {
+          if (abortController.signal.aborted) return
+          const result = await fetchImageForQuery(task.query, abortController.signal)
+          imagesDone++
+          if (result) {
+            imagesApplied++
+            pendingUpdates.push({ cardId: task.cardId, side: task.side, imageUrl: result.imageUrl })
+            setImageAgentLog((prev) => [...prev, `✓ ${task.side}: ${task.query}${result.embedded ? ' (embedded)' : ''}`])
+          } else if (!abortController.signal.aborted) {
+            imagesFailed++
+            setImageAgentLog((prev) => [...prev, `✕ ${task.side}: ${task.query}: no image found`])
+          }
+          setImageAgentProgress({ phase: 'images', done: imagesDone, total: imageTasks.length })
+          // Apply accumulated updates periodically
+          if (pendingUpdates.length > 0) {
+            const batch = pendingUpdates.splice(0, pendingUpdates.length)
+            updateSet((prev) => ({
+              ...prev,
+              cards: prev.cards.map((card) => {
+                const updates = batch.filter((u) => u.cardId === card.id)
+                if (updates.length === 0) return card
+                const frontUpdate = updates.find((u) => u.side === 'front')
+                const backUpdate = updates.find((u) => u.side === 'back')
+                return {
+                  ...card,
+                  ...(frontUpdate ? { frontImageUrl: frontUpdate.imageUrl, frontImageScale: 1, frontImageOffsetX: 0, frontImageOffsetY: 0 } : {}),
+                  ...(backUpdate ? { backImageUrl: backUpdate.imageUrl, backImageScale: 1, backImageOffsetX: 0, backImageOffsetY: 0 } : {}),
+                }
+              }),
+            }))
+          }
+        }
+
+        // Bounded concurrency worker pool
+        let taskIndex = 0
+        async function worker() {
+          while (taskIndex < imageTasks.length && !abortController.signal.aborted) {
+            const i = taskIndex++
+            if (i < imageTasks.length) await processImageTask(imageTasks[i])
+          }
+        }
+        await Promise.allSettled(Array.from({ length: IMAGE_CONCURRENCY }, () => worker()))
+
+        // Apply any remaining pending updates
+        if (pendingUpdates.length > 0) {
+          const batch = pendingUpdates.splice(0, pendingUpdates.length)
+          updateSet((prev) => ({
+            ...prev,
+            cards: prev.cards.map((card) => {
+              const updates = batch.filter((u) => u.cardId === card.id)
+              if (updates.length === 0) return card
+              const frontUpdate = updates.find((u) => u.side === 'front')
+              const backUpdate = updates.find((u) => u.side === 'back')
+              return {
+                ...card,
+                ...(frontUpdate ? { frontImageUrl: frontUpdate.imageUrl, frontImageScale: 1, frontImageOffsetX: 0, frontImageOffsetY: 0 } : {}),
+                ...(backUpdate ? { backImageUrl: backUpdate.imageUrl, backImageScale: 1, backImageOffsetX: 0, backImageOffsetY: 0 } : {}),
+              }
+            }),
+          }))
+        }
+
+        const wasCancelled = abortController.signal.aborted
+        const summary = wasCancelled
+          ? `Cancelled — saved ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}`
+          : `✓ Done: ${imagesApplied} image${imagesApplied === 1 ? '' : 's'} found${imagesFailed > 0 ? `, ${imagesFailed} not found` : ''}`
+        setImageAgentLog((prev) => [summary, ...prev])
+        if (wasCancelled) {
+          toast.message(`Cancelled — kept ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}`)
+        } else {
+          toast.success(needsAi
+            ? `Agent created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} with ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}`
+            : `Applied ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}${imagesFailed > 0 ? `; ${imagesFailed} not found` : ''}`)
+        }
+      } else if (needsAi) {
+        toast.success(`Agent created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'}`)
+      }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Flashcard Agent failed')
+      const msg = error instanceof Error ? error.message : 'Flashcard Agent failed'
+      setImageAgentLog((prev) => [`✕ Error: ${msg}`, ...prev])
+      toast.error(msg)
     } finally {
       setImageAgentLoading(false)
+      setImageAgentProgress(null)
+      imageAgentCancelRef.current = null
     }
   }
 
@@ -2026,7 +2163,8 @@ ${flashcardAgentMode === 'create' ? `This is batch ${batchIndex + 1} of ${batchT
               </div>
               <div className="space-y-2">
                 <Label htmlFor="flashcard-agent-count">Deck size / new cards</Label>
-                <Input id="flashcard-agent-count" type="number" min="1" max="150" value={flashcardAgentCount} onChange={(event) => setFlashcardAgentCount(event.target.value)} />
+                <Input id="flashcard-agent-count" type="number" min="1" max="60" value={flashcardAgentCount} onChange={(event) => setFlashcardAgentCount(event.target.value)} />
+                <p className="text-xs text-muted-foreground">Default 24. Max 60 per run (larger = slower).</p>
               </div>
             </div>
 
@@ -2098,14 +2236,31 @@ ${flashcardAgentMode === 'create' ? `This is batch ${batchIndex + 1} of ${batchT
             </div>
 
             <div className="flex flex-wrap justify-end gap-2">
-              <Button variant="outline" onClick={() => onOpenGoogleSettings()}>
-                Search Settings
+              <Button variant="outline" onClick={() => setImageSearchSettingsOpen(true)}>
+                <Gear className="mr-2" weight="bold" />
+                Image Search Settings
               </Button>
+              {imageAgentLoading ? (
+                <Button variant="outline" onClick={() => imageAgentCancelRef.current?.()}>
+                  <X className="mr-2" weight="bold" />
+                  Cancel
+                </Button>
+              ) : null}
               <Button onClick={runImageAgent} disabled={imageAgentLoading || !imageAgentAcceptedRisk}>
                 <Sparkle className="mr-2" weight="bold" />
                 {imageAgentLoading ? 'Working...' : 'Run Flashcard Agent'}
               </Button>
             </div>
+
+            {imageAgentProgress && (
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>{imageAgentProgress.phase === 'text' ? 'Generating text…' : 'Searching images…'}</span>
+                  <span>{imageAgentProgress.done}/{imageAgentProgress.total}</span>
+                </div>
+                <Progress value={imageAgentProgress.total > 0 ? (imageAgentProgress.done / imageAgentProgress.total) * 100 : 0} className="h-2" />
+              </div>
+            )}
 
             {imageAgentLog.length > 0 && (
               <div className="max-h-56 overflow-y-auto rounded-md border bg-muted/30 p-3 text-xs leading-relaxed">
@@ -2120,7 +2275,7 @@ ${flashcardAgentMode === 'create' ? `This is batch ${batchIndex + 1} of ${batchT
         <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>Search Web Images</DialogTitle>
-            <DialogDescription>Find a real web image and insert it directly into your flashcard. Uses FlashForge web search first; Google Custom Search is optional.</DialogDescription>
+            <DialogDescription>Find a real web image and insert it directly into your flashcard. Configure providers in Image Search Settings — Openverse works with no key.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="flex flex-col gap-2 sm:flex-row">
@@ -2138,6 +2293,10 @@ ${flashcardAgentMode === 'create' ? `This is batch ${batchIndex + 1} of ${batchT
               <Button onClick={runWebImageSearch} disabled={imageSearchLoading} className="sm:w-auto">
                 <MagnifyingGlass className="mr-2" weight="bold" />
                 Search
+              </Button>
+              <Button variant="outline" onClick={() => setImageSearchSettingsOpen(true)} className="sm:w-auto">
+                <Gear className="mr-2" weight="bold" />
+                Settings
               </Button>
             </div>
 
@@ -2160,8 +2319,82 @@ ${flashcardAgentMode === 'create' ? `This is batch ${batchIndex + 1} of ${batchT
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">No results yet. Search by keyword to load image options.</p>
+              <p className="text-sm text-muted-foreground">No results yet. Search by keyword to load image options. If results are empty, configure a provider in Image Search Settings (Openverse works without any key).</p>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={imageSearchSettingsOpen} onOpenChange={setImageSearchSettingsOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Image Search Settings</DialogTitle>
+            <DialogDescription>
+              Configure image search providers. <strong>Openverse works with no key.</strong> Auto mode tries all configured providers in order.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-5">
+            <div className="space-y-2">
+              <Label htmlFor="image-provider-select">Provider</Label>
+              <Select value={imageProvider} onValueChange={setImageProvider}>
+                <SelectTrigger id="image-provider-select"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Auto (tries all configured providers)</SelectItem>
+                  <SelectItem value="brave">Brave Image Search</SelectItem>
+                  <SelectItem value="pixabay">Pixabay</SelectItem>
+                  <SelectItem value="pexels">Pexels</SelectItem>
+                  <SelectItem value="google">Google Custom Search</SelectItem>
+                  <SelectItem value="openverse">Openverse (no key needed)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Auto priority: Brave → Google → Pexels → Pixabay → Openverse. Openverse always available as keyless fallback.</p>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-sm font-medium">API Keys (stored locally, never shared)</p>
+              <div className="space-y-2">
+                <Label htmlFor="img-brave-key" className="flex items-center justify-between">
+                  <span>Brave Search API token</span>
+                  {serverSearchConfig?.brave && <span className="text-xs text-green-600 flex items-center gap-1"><CheckCircle weight="fill" />Server configured</span>}
+                </Label>
+                <Input id="img-brave-key" type="password" value={imageBraveKey} onChange={(e) => setImageBraveKey(e.target.value)} placeholder={serverSearchConfig?.brave ? 'Configured on server — override here (optional)' : 'X-Subscription-Token from Brave API'} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="img-pixabay-key" className="flex items-center justify-between">
+                  <span>Pixabay API key</span>
+                  {serverSearchConfig?.pixabay && <span className="text-xs text-green-600 flex items-center gap-1"><CheckCircle weight="fill" />Server configured</span>}
+                </Label>
+                <Input id="img-pixabay-key" type="password" value={imagePixabayKey} onChange={(e) => setImagePixabayKey(e.target.value)} placeholder={serverSearchConfig?.pixabay ? 'Configured on server — override here (optional)' : 'Pixabay API key (free at pixabay.com/api/docs)'} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="img-pexels-key" className="flex items-center justify-between">
+                  <span>Pexels API key</span>
+                  {serverSearchConfig?.pexels && <span className="text-xs text-green-600 flex items-center gap-1"><CheckCircle weight="fill" />Server configured</span>}
+                </Label>
+                <Input id="img-pexels-key" type="password" value={imagePexelsKey} onChange={(e) => setImagePexelsKey(e.target.value)} placeholder={serverSearchConfig?.pexels ? 'Configured on server — override here (optional)' : 'Pexels API key (free at pexels.com/api)'} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="img-google-key" className="flex items-center justify-between">
+                  <span>Google API key</span>
+                  {serverSearchConfig?.google && <span className="text-xs text-green-600 flex items-center gap-1"><CheckCircle weight="fill" />Server configured</span>}
+                </Label>
+                <Input id="img-google-key" type="password" value={imageGoogleKey} onChange={(e) => setImageGoogleKey(e.target.value)} placeholder={serverSearchConfig?.google ? 'Configured on server — override here (optional)' : 'Google API key for Custom Search'} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="img-google-cx">Google Custom Search Engine ID (cx)</Label>
+                <Input id="img-google-cx" value={imageGoogleCx} onChange={(e) => setImageGoogleCx(e.target.value)} placeholder="Your Google Custom Search cx" />
+              </div>
+              {serverSearchConfig && (
+                <div className="rounded-md border border-green-200 bg-green-50 p-3 text-xs text-green-800">
+                  <strong>Server status:</strong> {Object.entries(serverSearchConfig).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'} configured via environment.
+                  {serverSearchConfig.openverse && <span> Openverse is always available.</span>}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end">
+              <Button onClick={() => setImageSearchSettingsOpen(false)}>Done</Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

@@ -386,32 +386,89 @@ For questions, issues, or feature requests, please open an issue on GitHub.
 
 ## BYOK Flashcard Agent
 
-FlashForge includes an optional **Flashcard Agent** for creating or enhancing whole cards. It can generate front text, back text, front image queries, back image queries, and then search/scrape real web images for the selected sides.
+FlashForge includes an optional **Flashcard Agent** for creating or enhancing whole decks. It generates card text in Phase 1, then searches for images per-card in Phase 2 — so you get a **live progress bar, a Cancel button, and partial results** are always preserved.
 
-Key behavior:
+### Two-Phase Architecture
 
-- BYOK AI: enter your own OpenAI-compatible API base URL, model name, and API key in the Flashcard Agent dialog. No shared model key is shipped.
-- Not Google-only: image search uses FlashForge's serverless web-image search first and can fall back through Google Custom Search if the user supplies Google credentials.
-- Full-card generation: the agent can create new cards or enhance existing cards, including front/back text and front/back images.
-- User-controlled images: choose front, back, or both sides; choose overwrite behavior; optionally download/embed images when the serverless endpoint can fetch them.
-- Centering: agent-added images start with neutral crop controls (`scale=1`, `offsetX=0`, `offsetY=0`) so they are centered by default, and teachers can still use the built-in drag/zoom controls for final positioning.
-- Risk acknowledgement: the dialog requires the user to accept responsibility for copyright, likeness, classroom appropriateness, and other image-use risks before running.
+- **Phase 1 — Text only:** the serverless endpoint generates `frontText`, `backText`, `frontImageQuery`, `backImageQuery` with a 50 s timeout and automatic retry on 429/5xx. Passes only a compact list of existing front texts (≤ 60) for de-duplication, not the full deck.
+- **Phase 2 — Images, client-orchestrated:** the client fetches images per card (up to 4 in parallel) by calling `/api/image-search`. Each fetch has its own 25 s timeout. A card whose image lookup fails is still created (without an image) and logged with a ✕ line.
 
-Recommended agent instructions:
+### BYOK AI Setup
 
-```text
-Create funny, classroom-safe ESL family flashcards for Japanese elementary students. Use short front text, useful back text, and specific real character/object image search queries.
-Create 20 food vocabulary cards. Front: English word. Back: simple Japanese meaning and example sentence. Use real food photo queries.
-Enhance these cards with more natural back text and funny but classroom-safe image queries.
+In the **Flashcard Agent** dialog:
+| Field | Description |
+|---|---|
+| AI model | Your provider's model name (e.g. `gpt-4o`, `claude-3-5-sonnet-20241022`) |
+| OpenAI-compatible base URL | Your provider's API base (e.g. `https://api.openai.com/v1`) |
+| BYOK AI API key | Your key — sent only to your chosen provider when you run the agent |
+
+No shared model key is shipped with FlashForge. Your key is stored in `localStorage` and never sent anywhere other than your chosen AI provider.
+
+### Image Search Providers
+
+FlashForge now uses a **provider registry** instead of HTML scraping. Configure providers via server env vars or in-app BYOK fields (Image Search Settings dialog).
+
+| Provider | Key needed | Notes |
+|---|---|---|
+| **Brave** | `BRAVE_API_KEY` / in-app | Best broad web results; great for characters/mascots |
+| **Google Custom Search** | `GOOGLE_API_KEY` + `GOOGLE_CX` / in-app | Optional web provider |
+| **Pexels** | `PEXELS_API_KEY` / in-app | Safe stock photos |
+| **Pixabay** | `PIXABAY_API_KEY` / in-app | Safe CC illustrations |
+| **Openverse** | *(none)* | Creative Commons fallback — always available |
+
+Auto mode priority: **Brave → Google → Pexels → Pixabay → Openverse**. The chain is built dynamically from which providers have credentials; Openverse is always last and always available.
+
+### Server Environment Variables
+
+See `.env.example` for a full list. The key vars:
+
+```
+BRAVE_API_KEY=          # Brave Search subscription token
+PIXABAY_API_KEY=        # Pixabay API key
+PEXELS_API_KEY=         # Pexels API key
+GOOGLE_API_KEY=         # Google API key for Custom Search
+GOOGLE_CX=              # Google Custom Search Engine ID
 ```
 
-Recommended image-only query templates:
+Set these in Vercel → Project Settings → Environment Variables (or your own hosting env). They are read server-side only and never returned to the client.
+
+### In-App BYOK Image Keys
+
+Open **Image Search Settings** (from the agent dialog or the web image search dialog) to enter per-provider keys that are stored in `localStorage` and sent in the request body. They override server env vars. The settings dialog shows **"Server configured ✓"** badges for any providers already set via env.
+
+### Capability Endpoint
+
+`GET /api/search-config` returns a booleans-only object indicating which providers are configured via server env (e.g. `{"brave":true,"pixabay":false,"pexels":false,"google":false,"openverse":true}`). Key values are never exposed.
+
+### Image Embedding
+
+Images are **embedded by default** (downloaded + stored as base64 data URLs). This ensures printed PDFs show images reliably even when the source URL later expires or blocks hotlinks. Images are compressed client-side to ≤ 1000 px / JPEG 0.75 quality to protect the ~5 MB localStorage budget. If an embed fails, the hotlink URL is stored instead.
+
+### Deck Size & Limits
+
+- Default deck size: **24 cards**
+- Maximum per run: **60 cards** (larger = slower; split into multiple runs for bigger decks)
+- Image search concurrency: **4 in flight** simultaneously
+- Vercel function max duration: **60 seconds** (set in `vercel.json`)
+
+### Cancel / Progress
+
+While the agent is running:
+- A **progress bar** shows "Generating text… X/Y batches" then "Searching images… X/Y"
+- A **Cancel** button stops the run immediately; all cards and images already fetched are kept
+
+### Recommended Agent Instructions
 
 ```text
-{front} funny character clear image
-{front} real object classroom flashcard image
-{front} funny character Japanese students recognize
-{front} {back} ESL flashcard image
+Create funny, classroom-safe ESL family flashcards for Japanese elementary students.
+Use short front text, useful back text, and specific real character/object image search queries.
 ```
 
-Template variables: `{front}`, `{back}`, `{text}`, `{title}`, and `{side}`.
+```text
+Create 20 food vocabulary cards. Front: English word. Back: simple Japanese meaning + example sentence.
+Use real food photo queries.
+```
+
+### Image Query Template Variables
+
+`{front}`, `{back}`, `{text}`, `{title}`, `{side}`. Example: `{front} funny character Japanese students recognize`
