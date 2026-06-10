@@ -26,4 +26,18 @@ export default tseslint.config(
       'no-control-regex': 'off',
     },
   },
+  {
+    files: ['api/**/*.js', 'api/__tests__/**/*.js', 'scripts/**/*.mjs'],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: globals.node,
+    },
+    rules: {
+      'no-redeclare': 'error',
+      'no-empty': ['error', { allowEmptyCatch: true }],
+      'no-unused-vars': 'off',
+    },
+  },
 )
