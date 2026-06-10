@@ -15,7 +15,7 @@ async function readBody(req) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
 }
 
-function extractJson(text) {
+export function extractJson(text) {
   const cleaned = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
   try { return JSON.parse(cleaned) } catch {}
   const start = cleaned.indexOf('{')
@@ -24,7 +24,7 @@ function extractJson(text) {
   throw new Error('AI response was not valid JSON')
 }
 
-function normalizeGeneratedCard(raw, index) {
+export function normalizeGeneratedCard(raw, index) {
   return {
     id: `card-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
     frontText: String(raw.frontText || raw.front || '').trim(),
@@ -34,7 +34,7 @@ function normalizeGeneratedCard(raw, index) {
   }
 }
 
-function classifyAiError(status, detail) {
+export function classifyAiError(status, detail) {
   if (status === 401) return 'AI authentication failed (401) \u2014 check your API key'
   if (status === 403) return 'AI access denied (403) \u2014 check your API key permissions'
   if (status === 429) return 'AI rate limit reached (429) \u2014 try again in a moment'
@@ -66,7 +66,6 @@ async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instru
     : `Improve/complete these flashcards for "${title}". Keep same ids. Fill missing text and add image search queries. Instructions: ${instructions}\nExisting fronts:\n${fronts.join('\n')}`
 
   let lastError
-  let includeJsonFormat = true
   let includeJsonFormat = true
   for (let attempt = 0; attempt < AI_MAX_RETRIES; attempt++) {
     if (attempt > 0) {

@@ -1340,7 +1340,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       setImageAgentProgress(null)
 
       // ── Phase 1: Text generation (batched) ──────────────────────────────
-      let generatedCards: FlashcardAgentGeneratedCard[] = []
+      const generatedCards: FlashcardAgentGeneratedCard[] = []
 
       if (needsAi) {
         const requestedCount = Math.max(1, Math.min(Number(flashcardAgentCount || 24), 60))

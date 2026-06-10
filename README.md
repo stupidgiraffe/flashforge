@@ -384,6 +384,42 @@ Built with:
 
 For questions, issues, or feature requests, please open an issue on GitHub.
 
+## 🧪 Testing
+
+### Unit tests (`npm test`)
+
+FlashForge includes a [Vitest](https://vitest.dev/) test suite covering the serverless API functions with fully mocked `fetch` — no real network calls required.
+
+```bash
+npm test            # single run (used by CI)
+npm run test:watch  # interactive watch mode
+```
+
+Tests live under `api/__tests__/` and cover:
+- **`_imageSearch.js`** — `resolveKeys` env-vs-request precedence, `getServerProviderConfig` booleans, per-provider response normalization (Brave, Pixabay, Pexels, Google, Openverse), the `auto` fallback chain order, error classification (401/429/5xx), `embedImage` byte-cap and content-type enforcement.
+- **`flashcard-agent.js`** — module import (regression for the duplicate-declaration crash), `extractJson` JSON-fence stripping and slice recovery, `classifyAiError` mapping, handler-level tests for valid response, 401/429, and a retry test proving the `includeJsonFormat` flip works.
+
+### CI
+
+A GitHub Actions workflow (`.github/workflows/ci.yml`) runs **lint → build → test** on every push and pull request. A syntax error or failing test will block the PR.
+
+### Live smoke test (`npm run smoke`)
+
+For manual verification that your real API credentials actually work end-to-end:
+
+```bash
+BRAVE_API_KEY=xxx \
+PIXABAY_API_KEY=xxx \
+PEXELS_API_KEY=xxx \
+GOOGLE_API_KEY=xxx GOOGLE_CX=xxx \
+AI_API_KEY=xxx AI_MODEL=gpt-4o \
+npm run smoke
+```
+
+- Any provider whose env vars are absent is **skipped** — the script never fails for missing optional keys.
+- Key values are **never printed**.
+- This script is **not run in CI** because it requires live credentials.
+
 ## BYOK Flashcard Agent
 
 FlashForge includes an optional **Flashcard Agent** for creating or enhancing whole decks. It generates card text in Phase 1, then searches for images per-card in Phase 2 — so you get a **live progress bar, a Cancel button, and partial results** are always preserved.
