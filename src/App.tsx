@@ -18,10 +18,8 @@ import type { FlashCardSet, FlashCard } from '@/lib/types'
 import { DEFAULT_PRINT_SETTINGS, DEFAULT_TEST_SETTINGS } from '@/lib/types'
 import { loadSets, saveSet, deleteSet, generateUniqueId, compressImage, exportSetToJSON, importSetFromJSON, exportAllSetsToJSON, importAllSetsFromJSON, duplicateSet, getStorageStats } from '@/lib/storage'
 import { FlashCardDisplay } from '@/components/FlashCardDisplay'
-import { StarterPackBrowser } from '@/components/StarterPackBrowser'
 import { generateTestQuestions } from '@/lib/test-utils'
 import { calculatePrintLayout, paginateCardsFixedLength, calculateBackPagePositions } from '@/lib/print-utils'
-import { createStarterSet } from '@/lib/starter-sets'
 
 declare global {
   interface Window {
@@ -188,19 +186,6 @@ function App() {
     saveSet(copy)
     setSets((prev) => sortSetsByRecent([copy, ...prev]))
     toast.success(`Duplicated "${source.title}"`)
-  }
-
-  function handleCreateStarterSet(templateId: string) {
-    const starter = createStarterSet(templateId)
-    if (!starter) {
-      toast.error('Starter pack not found')
-      return
-    }
-
-    saveSet(starter)
-    setSets((prev) => sortSetsByRecent([starter, ...prev]))
-    setCurrentSet(starter)
-    toast.success(`Created "${starter.title}"`)
   }
 
   function handleImportSet(file: File) {
@@ -677,7 +662,7 @@ function App() {
                       <Plus className="w-10 h-10 text-primary" weight="bold" />
                     </div>
                     <p className="text-xl font-semibold text-foreground mb-2">No flashcard sets yet</p>
-                    <p className="text-muted-foreground mb-6 text-center">Create a blank set or start from a polished teaching pack.</p>
+                    <p className="text-muted-foreground mb-6 text-center">Create a blank set to get started.</p>
                     <div className="flex flex-col sm:flex-row gap-3">
                       <Button onClick={() => setCreateDialogOpen(true)} size="lg" className="shadow-md">
                         <Plus className="mr-2" weight="bold" />
@@ -686,7 +671,6 @@ function App() {
                     </div>
                   </CardContent>
                 </Card>
-                <StarterPackBrowser onUseTemplate={handleCreateStarterSet} />
               </div>
             ) : (
               <div className="space-y-8">
@@ -765,7 +749,6 @@ function App() {
                   </Card>
                   ))}
                 </div>
-                <StarterPackBrowser onUseTemplate={handleCreateStarterSet} />
               </div>
             )}
           </div>
@@ -1028,6 +1011,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [imageAgentLoading, setImageAgentLoading] = useState(false)
   const [imageAgentLog, setImageAgentLog] = useState<string[]>([])
   const [imageAgentProgress, setImageAgentProgress] = useState<{ phase: 'text' | 'images'; done: number; total: number } | null>(null)
+  const [imageAgentSummary, setImageAgentSummary] = useState<string | null>(null)
   const imageAgentCancelRef = useRef<(() => void) | null>(null)
   // Image search provider settings (persisted)
   const [imageBraveKey, setImageBraveKey] = useState(() => localStorage.getItem('flashforge_brave_key') ?? '')
@@ -1334,8 +1318,19 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     const abortController = new AbortController()
     imageAgentCancelRef.current = () => abortController.abort()
 
+    // Authoritative in-memory working copy of the deck cards.
+    // Using a local array avoids the stale-closure bug where Phase 2 updateSet
+    // calls would overwrite Phase 1 cards because `set` was frozen at run start.
+    let workingCards: FlashCard[] = [...set.cards]
+    let hasNewContent = false
+
+    function persistWorkingState() {
+      onUpdate({ ...set, cards: workingCards })
+    }
+
     try {
       setImageAgentLoading(true)
+      setImageAgentSummary(null)
       setImageAgentLog([])
       setImageAgentProgress(null)
 
@@ -1389,36 +1384,36 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
         setImageAgentLog((prev) => [...prev, `✓ Generated ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} — now searching for images...`])
 
-        // Add text-only cards to the set immediately so user sees progress
-        updateSet((prev) => {
-          if (flashcardAgentMode === 'create') {
-            return {
-              ...prev,
-              cards: [...prev.cards, ...generatedCards.map((card) => ({
-                id: card.id,
-                frontText: card.frontText,
-                backText: card.backText,
-                imagePosition: 'front' as const,
-                frontImageScale: 1,
-                backImageScale: 1,
-                frontImageOffsetX: 0,
-                frontImageOffsetY: 0,
-                backImageOffsetX: 0,
-                backImageOffsetY: 0,
-                imageScale: 1,
-              }))],
-            }
-          }
+        // Build the working copy from Phase 1 results
+        if (flashcardAgentMode === 'create') {
+          workingCards = [
+            ...set.cards,
+            ...generatedCards.map((card) => ({
+              id: card.id,
+              frontText: card.frontText,
+              backText: card.backText,
+              imagePosition: 'front' as const,
+              frontImageScale: 1,
+              backImageScale: 1,
+              frontImageOffsetX: 0,
+              frontImageOffsetY: 0,
+              backImageOffsetX: 0,
+              backImageOffsetY: 0,
+              imageScale: 1,
+            })),
+          ]
+        } else {
           const byId = new Map(generatedCards.map((c) => [c.id, c]))
-          return {
-            ...prev,
-            cards: prev.cards.map((card) => {
-              const gen = byId.get(card.id)
-              if (!gen) return card
-              return { ...card, frontText: gen.frontText || card.frontText, backText: gen.backText || card.backText }
-            }),
-          }
-        })
+          workingCards = set.cards.map((card) => {
+            const gen = byId.get(card.id)
+            if (!gen) return card
+            return { ...card, frontText: gen.frontText || card.frontText, backText: gen.backText || card.backText }
+          })
+        }
+
+        hasNewContent = true
+        // Persist text-only cards immediately so the user sees progress
+        persistWorkingState()
       }
 
       // ── Phase 2: Image search (client-orchestrated, bounded concurrency) ─
@@ -1467,40 +1462,32 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         let imagesApplied = 0
         let imagesFailed = 0
 
-        // Collect results to apply in batch
-        const pendingUpdates: Array<{ cardId: string; side: 'front' | 'back'; imageUrl: string }> = []
-
         async function processImageTask(task: ImageTask) {
           if (abortController.signal.aborted) return
           const result = await fetchImageForQuery(task.query, abortController.signal)
           imagesDone++
           if (result) {
             imagesApplied++
-            pendingUpdates.push({ cardId: task.cardId, side: task.side, imageUrl: result.imageUrl })
+            // Update workingCards directly — no stale-closure risk
+            const cardIndex = workingCards.findIndex((c) => c.id === task.cardId)
+            if (cardIndex >= 0) {
+              const card = workingCards[cardIndex]
+              workingCards[cardIndex] = {
+                ...card,
+                ...(task.side === 'front'
+                  ? { frontImageUrl: result.imageUrl, frontImageScale: 1, frontImageOffsetX: 0, frontImageOffsetY: 0 }
+                  : { backImageUrl: result.imageUrl, backImageScale: 1, backImageOffsetX: 0, backImageOffsetY: 0 }),
+              }
+            }
             setImageAgentLog((prev) => [...prev, `✓ ${task.side}: ${task.query}${result.embedded ? ' (embedded)' : ''}`])
           } else if (!abortController.signal.aborted) {
             imagesFailed++
             setImageAgentLog((prev) => [...prev, `✕ ${task.side}: ${task.query}: no image found`])
           }
           setImageAgentProgress({ phase: 'images', done: imagesDone, total: imageTasks.length })
-          // Apply accumulated updates periodically
-          if (pendingUpdates.length > 0) {
-            const batch = pendingUpdates.splice(0, pendingUpdates.length)
-            updateSet((prev) => ({
-              ...prev,
-              cards: prev.cards.map((card) => {
-                const updates = batch.filter((u) => u.cardId === card.id)
-                if (updates.length === 0) return card
-                const frontUpdate = updates.find((u) => u.side === 'front')
-                const backUpdate = updates.find((u) => u.side === 'back')
-                return {
-                  ...card,
-                  ...(frontUpdate ? { frontImageUrl: frontUpdate.imageUrl, frontImageScale: 1, frontImageOffsetX: 0, frontImageOffsetY: 0 } : {}),
-                  ...(backUpdate ? { backImageUrl: backUpdate.imageUrl, backImageScale: 1, backImageOffsetX: 0, backImageOffsetY: 0 } : {}),
-                }
-              }),
-            }))
-          }
+          // Persist periodically so partial results are not lost on error/cancel
+          hasNewContent = true
+          persistWorkingState()
         }
 
         // Bounded concurrency worker pool
@@ -1513,44 +1500,35 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         }
         await Promise.allSettled(Array.from({ length: IMAGE_CONCURRENCY }, () => worker()))
 
-        // Apply any remaining pending updates
-        if (pendingUpdates.length > 0) {
-          const batch = pendingUpdates.splice(0, pendingUpdates.length)
-          updateSet((prev) => ({
-            ...prev,
-            cards: prev.cards.map((card) => {
-              const updates = batch.filter((u) => u.cardId === card.id)
-              if (updates.length === 0) return card
-              const frontUpdate = updates.find((u) => u.side === 'front')
-              const backUpdate = updates.find((u) => u.side === 'back')
-              return {
-                ...card,
-                ...(frontUpdate ? { frontImageUrl: frontUpdate.imageUrl, frontImageScale: 1, frontImageOffsetX: 0, frontImageOffsetY: 0 } : {}),
-                ...(backUpdate ? { backImageUrl: backUpdate.imageUrl, backImageScale: 1, backImageOffsetX: 0, backImageOffsetY: 0 } : {}),
-              }
-            }),
-          }))
-        }
+        // Final persist to ensure all results are saved
+        persistWorkingState()
 
         const wasCancelled = abortController.signal.aborted
-        const summary = wasCancelled
+        const logSummary = wasCancelled
           ? `Cancelled — saved ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}`
           : `✓ Done: ${imagesApplied} image${imagesApplied === 1 ? '' : 's'} found${imagesFailed > 0 ? `, ${imagesFailed} not found` : ''}`
-        setImageAgentLog((prev) => [summary, ...prev])
+        setImageAgentLog((prev) => [logSummary, ...prev])
         if (wasCancelled) {
           toast.message(`Cancelled — kept ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}`)
         } else {
           toast.success(needsAi
             ? `Agent created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} with ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}`
             : `Applied ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}${imagesFailed > 0 ? `; ${imagesFailed} not found` : ''}`)
+          setImageAgentSummary(needsAi
+            ? `Created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} · ${imagesApplied} image${imagesApplied === 1 ? '' : 's'} found${imagesFailed > 0 ? ` · ${imagesFailed} not found` : ''}`
+            : `${imagesApplied} image${imagesApplied === 1 ? '' : 's'} applied${imagesFailed > 0 ? ` · ${imagesFailed} not found` : ''}`)
         }
       } else if (needsAi) {
+        persistWorkingState()
         toast.success(`Agent created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'}`)
+        setImageAgentSummary(`Created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'}`)
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Flashcard Agent failed'
       setImageAgentLog((prev) => [`✕ Error: ${msg}`, ...prev])
       toast.error(msg)
+      // Preserve any partial progress already accumulated
+      if (hasNewContent) persistWorkingState()
     } finally {
       setImageAgentLoading(false)
       setImageAgentProgress(null)
@@ -2245,7 +2223,11 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                   <X className="mr-2" weight="bold" />
                   Cancel
                 </Button>
-              ) : null}
+              ) : (
+                <Button variant="outline" onClick={() => setImageAgentOpen(false)}>
+                  Done
+                </Button>
+              )}
               <Button onClick={runImageAgent} disabled={imageAgentLoading || !imageAgentAcceptedRisk}>
                 <Sparkle className="mr-2" weight="bold" />
                 {imageAgentLoading ? 'Working...' : 'Run Flashcard Agent'}
@@ -2260,6 +2242,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 </div>
                 <Progress value={imageAgentProgress.total > 0 ? (imageAgentProgress.done / imageAgentProgress.total) * 100 : 0} className="h-2" />
               </div>
+            )}
+
+            {imageAgentSummary && !imageAgentLoading && (
+              <p className="text-sm font-medium text-green-700 dark:text-green-400">{imageAgentSummary}</p>
             )}
 
             {imageAgentLog.length > 0 && (
