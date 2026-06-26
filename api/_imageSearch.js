@@ -6,6 +6,84 @@ const EMBED_HEADERS = {
 const MAX_EMBED_BYTES = 2_000_000
 const PROVIDER_TIMEOUT_MS = 12_000
 
+export class ImageSearchError extends Error {
+  constructor(message, { code, provider, query, status, hint, details } = {}) {
+    super(message)
+    this.name = 'ImageSearchError'
+    this.code = code || 'provider_network_error'
+    this.provider = provider
+    this.query = query
+    this.status = status
+    this.hint = hint
+    this.details = details
+  }
+}
+
+function providerLabel(provider) {
+  return provider ? provider[0].toUpperCase() + provider.slice(1) : 'Image provider'
+}
+
+function providerError(provider, query, code, message, extras = {}) {
+  return new ImageSearchError(message, { provider, query, code, ...extras })
+}
+
+function classifyStatus(provider, query, status) {
+  if (status === 401 || status === 403) {
+    return providerError(provider, query, 'provider_auth_failed', `${providerLabel(provider)} auth failed`, {
+      status,
+      hint: `Check the ${providerLabel(provider)} API key and account access.`,
+    })
+  }
+  if (status === 429) {
+    return providerError(provider, query, 'provider_rate_limited', `${providerLabel(provider)} rate limit reached`, {
+      status,
+      hint: `Wait and try again, or switch providers in Auto mode.`,
+    })
+  }
+  if (status >= 400 && status < 500) {
+    return providerError(provider, query, 'provider_bad_request', `${providerLabel(provider)} rejected the image search request`, {
+      status,
+      hint: `Check the query and provider configuration.`,
+    })
+  }
+  return providerError(provider, query, 'provider_network_error', `${providerLabel(provider)} image search failed`, {
+    status,
+    hint: `Check provider status or try Auto fallback.`,
+  })
+}
+
+function classifyThrown(provider, query, error) {
+  if (error instanceof ImageSearchError) return error
+  if (error && error.name === 'AbortError') {
+    return providerError(provider, query, 'provider_timeout', `${providerLabel(provider)} image search timed out`, {
+      hint: `Try again or switch providers.`,
+    })
+  }
+  return providerError(provider, query, 'provider_network_error', `${providerLabel(provider)} image search network error`, {
+    details: error instanceof Error ? error.message : String(error || 'unknown error'),
+    hint: `Check the network connection or try another provider.`,
+  })
+}
+
+export function imageSearchErrorBody(error, fallback = 'Image search failed') {
+  if (error instanceof ImageSearchError) {
+    return {
+      error: error.message || fallback,
+      code: error.code,
+      provider: error.provider,
+      query: error.query,
+      status: error.status,
+      hint: error.hint,
+      details: error.details,
+    }
+  }
+  return {
+    error: error instanceof Error ? error.message : fallback,
+    code: 'provider_network_error',
+    hint: 'Check the image provider settings and try again.',
+  }
+}
+
 function normalizeResult(result) {
   const link = result.link || result.image || result.imageUrl || result.thumbnail || result.thumbnailLink
   if (!link) return null
@@ -47,7 +125,9 @@ export function getServerProviderConfig() {
 }
 
 async function searchBrave({ query, apiKey, limit }) {
-  if (!apiKey) return []
+  if (!apiKey) throw providerError('brave', query, 'provider_not_configured', 'Brave image search is not configured', {
+    hint: 'Add a Brave Search API token or switch to Auto/Openverse.',
+  })
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), PROVIDER_TIMEOUT_MS)
   try {
@@ -64,9 +144,7 @@ async function searchBrave({ query, apiKey, limit }) {
       },
     })
     if (!response.ok) {
-      if (response.status === 401) throw new Error('Brave: invalid API key (401)')
-      if (response.status === 429) throw new Error('Brave: rate limit reached (429)')
-      throw new Error(`Brave image search failed (${response.status})`)
+      throw classifyStatus('brave', query, response.status)
     }
     const data = await response.json()
     return (data.results || []).slice(0, limit).map((item) => normalizeResult({
@@ -76,13 +154,17 @@ async function searchBrave({ query, apiKey, limit }) {
       sourcePage: item.url,
       provider: 'brave',
     })).filter(Boolean)
+  } catch (error) {
+    throw classifyThrown('brave', query, error)
   } finally {
     clearTimeout(timer)
   }
 }
 
 async function searchPixabay({ query, apiKey, limit }) {
-  if (!apiKey) return []
+  if (!apiKey) throw providerError('pixabay', query, 'provider_not_configured', 'Pixabay image search is not configured', {
+    hint: 'Add a Pixabay API key or switch to Auto/Openverse.',
+  })
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), PROVIDER_TIMEOUT_MS)
   try {
@@ -94,9 +176,7 @@ async function searchPixabay({ query, apiKey, limit }) {
     url.searchParams.set('per_page', String(Math.min(Math.max(limit, 3), 20)))
     const response = await fetch(url, { signal: controller.signal })
     if (!response.ok) {
-      if (response.status === 400 || response.status === 401) throw new Error('Pixabay: invalid API key')
-      if (response.status === 429) throw new Error('Pixabay: rate limit reached (429)')
-      throw new Error(`Pixabay image search failed (${response.status})`)
+      throw classifyStatus('pixabay', query, response.status)
     }
     const data = await response.json()
     return (data.hits || []).slice(0, limit).map((item) => normalizeResult({
@@ -106,13 +186,17 @@ async function searchPixabay({ query, apiKey, limit }) {
       sourcePage: item.pageURL,
       provider: 'pixabay',
     })).filter(Boolean)
+  } catch (error) {
+    throw classifyThrown('pixabay', query, error)
   } finally {
     clearTimeout(timer)
   }
 }
 
 async function searchPexels({ query, apiKey, limit }) {
-  if (!apiKey) return []
+  if (!apiKey) throw providerError('pexels', query, 'provider_not_configured', 'Pexels image search is not configured', {
+    hint: 'Add a Pexels API key or switch to Auto/Openverse.',
+  })
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), PROVIDER_TIMEOUT_MS)
   try {
@@ -124,9 +208,7 @@ async function searchPexels({ query, apiKey, limit }) {
       headers: { Authorization: apiKey },
     })
     if (!response.ok) {
-      if (response.status === 401) throw new Error('Pexels: invalid API key (401)')
-      if (response.status === 429) throw new Error('Pexels: rate limit reached (429)')
-      throw new Error(`Pexels image search failed (${response.status})`)
+      throw classifyStatus('pexels', query, response.status)
     }
     const data = await response.json()
     return (data.photos || []).slice(0, limit).map((item) => normalizeResult({
@@ -136,13 +218,17 @@ async function searchPexels({ query, apiKey, limit }) {
       sourcePage: item.url,
       provider: 'pexels',
     })).filter(Boolean)
+  } catch (error) {
+    throw classifyThrown('pexels', query, error)
   } finally {
     clearTimeout(timer)
   }
 }
 
 async function searchGoogle({ query, apiKey, cx, limit }) {
-  if (!apiKey || !cx) return []
+  if (!apiKey || !cx) throw providerError('google', query, 'provider_not_configured', 'Google image search is not configured', {
+    hint: 'Add both a Google API key and Custom Search cx, or switch to Auto/Openverse.',
+  })
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), PROVIDER_TIMEOUT_MS)
   try {
@@ -155,9 +241,7 @@ async function searchGoogle({ query, apiKey, cx, limit }) {
     url.searchParams.set('cx', cx)
     const response = await fetch(url, { signal: controller.signal })
     if (!response.ok) {
-      if (response.status === 401 || response.status === 403) throw new Error('Google: invalid API key or quota exceeded')
-      if (response.status === 429) throw new Error('Google Image Search rate limit reached (429)')
-      throw new Error(`Google Image Search failed (${response.status})`)
+      throw classifyStatus('google', query, response.status)
     }
     const data = await response.json()
     return (data.items || [])
@@ -169,6 +253,8 @@ async function searchGoogle({ query, apiKey, cx, limit }) {
         provider: 'google',
       }))
       .filter(Boolean)
+  } catch (error) {
+    throw classifyThrown('google', query, error)
   } finally {
     clearTimeout(timer)
   }
@@ -186,7 +272,7 @@ async function searchOpenverse({ query, limit }) {
       signal: controller.signal,
       headers: { 'User-Agent': EMBED_HEADERS['User-Agent'], Accept: 'application/json' },
     })
-    if (!response.ok) throw new Error(`Openverse image search failed (${response.status})`)
+    if (!response.ok) throw classifyStatus('openverse', query, response.status)
     const data = await response.json()
     return (data.results || [])
       .slice(0, limit)
@@ -198,6 +284,8 @@ async function searchOpenverse({ query, limit }) {
         provider: 'openverse',
       }))
       .filter(Boolean)
+  } catch (error) {
+    throw classifyThrown('openverse', query, error)
   } finally {
     clearTimeout(timer)
   }
@@ -221,16 +309,16 @@ export async function searchImages({ query, provider = 'auto', limit = 10, keys 
   if (provider === 'auto') {
     // Build chain dynamically from available credentials; openverse is always last-resort
     chain = []
-    if (braveApiKey) chain.push('brave')
     if (googleApiKey && googleCx) chain.push('google')
-    if (pexelsApiKey) chain.push('pexels')
+    if (braveApiKey) chain.push('brave')
     if (pixabayApiKey) chain.push('pixabay')
+    if (pexelsApiKey) chain.push('pexels')
     chain.push('openverse')
   } else {
     chain = [provider]
   }
 
-  const errors = []
+  const attempts = []
   for (const current of chain) {
     try {
       let results = []
@@ -240,12 +328,22 @@ export async function searchImages({ query, provider = 'auto', limit = 10, keys 
       else if (current === 'google') results = await searchGoogle({ query: trimmed, apiKey: googleApiKey, cx: googleCx, limit })
       else if (current === 'openverse') results = await searchOpenverse({ query: trimmed, limit })
       if (results.length > 0) return results.slice(0, limit)
+      attempts.push({ provider: current, code: 'provider_zero_results', query: trimmed })
+      if (provider !== 'auto') {
+        throw providerError(current, trimmed, 'provider_zero_results', `No image found from ${providerLabel(current)}`, {
+          hint: `${providerLabel(current)} returned 0 image results for this query.`,
+        })
+      }
     } catch (error) {
-      errors.push(`${current}: ${error instanceof Error ? error.message : 'failed'}`)
+      const classified = classifyThrown(current, trimmed, error)
+      attempts.push(imageSearchErrorBody(classified))
+      if (provider !== 'auto') throw classified
     }
   }
-  if (errors.length) throw new Error(errors.join('; '))
-  return []
+  throw providerError('auto', trimmed, 'all_providers_failed', 'All configured image providers failed', {
+    details: attempts,
+    hint: 'Check configured provider keys or try a simpler query.',
+  })
 }
 
 export async function embedImage(imageUrl) {

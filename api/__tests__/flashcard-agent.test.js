@@ -13,7 +13,7 @@ describe('module load', () => {
 // ---------------------------------------------------------------------------
 // Import helpers
 // ---------------------------------------------------------------------------
-import { extractJson, normalizeGeneratedCard, classifyAiError } from '../flashcard-agent.js'
+import { extractJson, normalizeGeneratedCard, normalizeRevisedCard, normalizeCreateCount, extractProviderErrorDetail, classifyAiError } from '../flashcard-agent.js'
 
 // ---------------------------------------------------------------------------
 // extractJson
@@ -76,10 +76,66 @@ describe('normalizeGeneratedCard', () => {
   })
 })
 
+describe('normalizeCreateCount', () => {
+  it('clamps create count to the supported range', () => {
+    expect(normalizeCreateCount(0)).toBe(1)
+    expect(normalizeCreateCount(-10)).toBe(1)
+    expect(normalizeCreateCount(500)).toBe(50)
+    expect(normalizeCreateCount('abc')).toBe(10)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// normalizeRevisedCard
+// ---------------------------------------------------------------------------
+describe('normalizeRevisedCard', () => {
+  it('preserves the original id and unmentioned fields', () => {
+    const original = {
+      id: 'card-1',
+      frontText: 'Old front',
+      backText: 'Old back',
+      frontImageUrl: 'https://example.com/front.jpg',
+    }
+    const card = normalizeRevisedCard({ frontText: 'New front' }, original)
+    expect(card.id).toBe('card-1')
+    expect(card.frontText).toBe('New front')
+    expect(card.backText).toBe('Old back')
+    expect(card.frontImageUrl).toBe('https://example.com/front.jpg')
+  })
+
+  it('does not blank existing text when AI returns empty strings', () => {
+    const original = { id: 'card-1', frontText: 'Keep front', backText: 'Keep back' }
+    const card = normalizeRevisedCard({ frontText: '   ', backText: '' }, original)
+    expect(card.frontText).toBe('Keep front')
+    expect(card.backText).toBe('Keep back')
+  })
+
+  it('only includes image query suggestions when image revision is allowed', () => {
+    const original = { id: 'card-1', frontText: 'Cat', backText: 'ねこ' }
+    const blocked = normalizeRevisedCard({ frontImageQuery: 'cute classroom cat' }, original, false)
+    const allowed = normalizeRevisedCard({ frontImageQuery: 'cute classroom cat' }, original, true)
+    expect(blocked.frontImageQuery).toBeUndefined()
+    expect(allowed.frontImageQuery).toBe('cute classroom cat')
+  })
+})
+
 // ---------------------------------------------------------------------------
 // classifyAiError
 // ---------------------------------------------------------------------------
 describe('classifyAiError', () => {
+  it('extracts provider JSON error details', () => {
+    const detail = extractProviderErrorDetail(JSON.stringify({
+      error: {
+        message: 'The model `bad-model` does not exist',
+        type: 'invalid_request_error',
+        code: 'model_not_found',
+      },
+    }))
+
+    expect(detail).toMatch(/bad-model/)
+    expect(detail).toMatch(/model_not_found/)
+  })
+
   it('maps 401 to auth error', () => {
     expect(classifyAiError(401, '')).toMatch(/authentication/)
   })
@@ -93,7 +149,11 @@ describe('classifyAiError', () => {
   })
 
   it('maps 400+model detail to model error', () => {
-    expect(classifyAiError(400, 'The model does not exist')).toMatch(/model/)
+    expect(classifyAiError(400, '{"error":{"message":"The model does not exist"}}')).toMatch(/model/)
+  })
+
+  it('maps provider 404 to base URL/model guidance', () => {
+    expect(classifyAiError(404, '{"error":{"message":"Not Found"}}')).toMatch(/base URL/)
   })
 
   it('maps 500 to server error', () => {
@@ -173,6 +233,127 @@ describe('handler', () => {
     expect(data.cards[0].frontText).toBe('Cat')
   })
 
+  it('accepts a JSON array as a provider card response', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        choices: [{ message: { content: JSON.stringify([{ frontText: 'Red', backText: 'A color' }]) } }],
+      }),
+    })
+
+    const res = makeRes()
+    await handler(
+      makeReq({ aiApiKey: 'test', aiModel: 'gpt-4o', mode: 'create', title: 'Test', count: 1 }),
+      res,
+    )
+
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body).cards[0].frontText).toBe('Red')
+  })
+
+  it('returns structured error when provider returns no message content', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ choices: [{ message: {} }] }),
+    })
+
+    const res = makeRes()
+    await handler(
+      makeReq({ aiApiKey: 'test', aiModel: 'gpt-4o', mode: 'create', title: 'Test', count: 1 }),
+      res,
+    )
+
+    expect(res.statusCode).toBe(502)
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'AI_EMPTY_RESPONSE' })
+  })
+
+  it('returns structured error when provider returns no usable cards', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        choices: [{ message: { content: JSON.stringify({ cards: [{ frontText: ' ', backText: '' }] }) } }],
+      }),
+    })
+
+    const res = makeRes()
+    await handler(
+      makeReq({ aiApiKey: 'test', aiModel: 'gpt-4o', mode: 'create', title: 'Test', count: 1 }),
+      res,
+    )
+
+    expect(res.statusCode).toBe(502)
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'AI_NO_USABLE_CARDS' })
+  })
+
+  it('clamps huge create counts before prompting the provider', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        choices: [{ message: { content: JSON.stringify({ cards: [{ frontText: 'One', backText: '1' }] }) } }],
+      }),
+    })
+
+    const res = makeRes()
+    await handler(
+      makeReq({ aiApiKey: 'test', aiModel: 'gpt-4o', mode: 'create', title: 'Test', count: 5000 }),
+      res,
+    )
+
+    const requestBody = JSON.parse(global.fetch.mock.calls[0][1].body)
+    expect(requestBody.messages[1].content).toMatch(/Create 50 classroom flashcards/)
+  })
+
+  it('revises selected cards without inventing ids or touching unknown ids', async () => {
+    const aiPayload = {
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            cards: [
+              { id: 'card-1', frontText: 'Better front', backText: 'Better back' },
+              { id: 'unknown-card', frontText: 'Ignore me', backText: 'Ignore me' },
+            ],
+          }),
+        },
+      }],
+    }
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(aiPayload),
+    })
+
+    const res = makeRes()
+    await handler(
+      makeReq({
+        aiApiKey: 'test',
+        aiModel: 'gpt-4o',
+        mode: 'revise',
+        title: 'Test',
+        instructions: 'Make it easier',
+        existingCards: [
+          { id: 'card-1', frontText: 'Old front', backText: 'Old back' },
+          { id: 'card-2', frontText: 'Keep front', backText: 'Keep back' },
+        ],
+      }),
+      res,
+    )
+
+    expect(res.statusCode).toBe(200)
+    const data = JSON.parse(res.body)
+    expect(data.cards).toHaveLength(2)
+    expect(data.cards[0]).toMatchObject({ id: 'card-1', frontText: 'Better front', backText: 'Better back' })
+    expect(data.cards[1]).toMatchObject({ id: 'card-2', frontText: 'Keep front', backText: 'Keep back' })
+
+    const requestBody = JSON.parse(global.fetch.mock.calls[0][1].body)
+    expect(requestBody.temperature).toBe(0.25)
+    expect(requestBody.messages[0].content).toMatch(/Preserve card ids exactly/)
+    expect(requestBody.messages[1].content).toMatch(/card-1/)
+  })
+
   it('returns 401 when AI returns 401', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
@@ -186,7 +367,7 @@ describe('handler', () => {
       res,
     )
     expect(res.statusCode).toBe(401)
-    expect(JSON.parse(res.body).error).toMatch(/401/)
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'AI_AUTH_FAILED' })
   })
 
   it('returns 429 when AI returns 429', async () => {
@@ -202,6 +383,7 @@ describe('handler', () => {
       res,
     )
     expect(res.statusCode).toBe(429)
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'AI_RATE_LIMIT' })
   })
 
   it('retries and succeeds when first attempt returns malformed JSON (proves includeJsonFormat flip)', async () => {
@@ -240,24 +422,74 @@ describe('handler', () => {
     expect(secondCallBody.response_format).toBeUndefined()
   })
 
-  it('returns 401 when AI key is missing', async () => {
+  it('retries without response_format when provider rejects JSON mode', async () => {
+    let callCount = 0
+    global.fetch = vi.fn().mockImplementation(() => {
+      callCount++
+      if (callCount === 1) {
+        return Promise.resolve({
+          ok: false,
+          status: 400,
+          text: () => Promise.resolve(JSON.stringify({ error: { message: 'response_format is not supported' } })),
+        })
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          choices: [{ message: { content: JSON.stringify({ cards: [{ frontText: 'Bird', backText: 'Tori' }] }) } }],
+        }),
+      })
+    })
+
+    const res = makeRes()
+    await handler(
+      makeReq({ aiApiKey: 'key', aiModel: 'some-openai-compatible-model', mode: 'create', title: 'Test', count: 1 }),
+      res,
+    )
+
+    expect(res.statusCode).toBe(200)
+    const secondCallBody = JSON.parse(global.fetch.mock.calls[1][1].body)
+    expect(secondCallBody.response_format).toBeUndefined()
+  })
+
+  it('returns 400 when AI key is missing', async () => {
     const res = makeRes()
     await handler(
       makeReq({ aiApiKey: '', aiModel: 'gpt-4o', mode: 'create', title: 'Test', count: 1 }),
       res,
     )
-    // "Missing BYOK AI API key" contains "API key" → classified as 401 by the handler
-    expect(res.statusCode).toBe(401)
-    expect(JSON.parse(res.body).error).toMatch(/API key/)
+    expect(res.statusCode).toBe(400)
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'MISSING_API_KEY' })
   })
 
-  it('returns 500 when model is missing', async () => {
+  it('returns 400 when model is missing', async () => {
     const res = makeRes()
     await handler(
       makeReq({ aiApiKey: 'key', aiModel: '', mode: 'create', title: 'Test', count: 1 }),
       res,
     )
-    expect(res.statusCode).toBe(500)
-    expect(JSON.parse(res.body).error).toMatch(/model/)
+    expect(res.statusCode).toBe(400)
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'MISSING_MODEL' })
+  })
+
+  it('returns 400 for unsupported mode', async () => {
+    const res = makeRes()
+    await handler(
+      makeReq({ aiApiKey: 'key', aiModel: 'gpt-4o', mode: 'bogus', title: 'Test', count: 1 }),
+      res,
+    )
+    expect(res.statusCode).toBe(400)
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'INVALID_MODE' })
+  })
+
+  it('returns 400 for invalid base URL', async () => {
+    const res = makeRes()
+    await handler(
+      makeReq({ aiApiKey: 'key', aiModel: 'gpt-4o', aiBaseUrl: 'not a url', mode: 'create', title: 'Test', count: 1 }),
+      res,
+    )
+    expect(res.statusCode).toBe(400)
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'INVALID_BASE_URL' })
   })
 })

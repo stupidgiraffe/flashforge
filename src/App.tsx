@@ -20,6 +20,10 @@ import { loadSets, saveSet, deleteSet, generateUniqueId, compressImage, exportSe
 import { FlashCardDisplay } from '@/components/FlashCardDisplay'
 import { generateTestQuestions } from '@/lib/test-utils'
 import { calculatePrintLayout, paginateCardsFixedLength, calculateBackPagePositions } from '@/lib/print-utils'
+import { getChangedFields, mergeRevisedCards, validateRevisionResult } from '@/lib/flashcard-revision'
+import type { FlashcardRevisionCard } from '@/lib/flashcard-revision'
+import { explainAiAgentError, formatAiAgentError } from '@/lib/ai-agent-errors'
+import { getImageAgentOutcome, normalizeImageQuery } from '@/lib/image-agent'
 
 declare global {
   interface Window {
@@ -782,10 +786,19 @@ interface ImageSearchResult {
   title: string
   link: string
   thumbnailLink?: string
+  provider?: string
+}
+
+interface ImageSearchWarning {
+  error?: string
+  code?: string
+  provider?: string
+  query?: string
+  hint?: string
 }
 
 type ImageAgentTargetSide = 'front' | 'back' | 'both'
-type FlashcardAgentMode = 'create' | 'enhance'
+type FlashcardAgentMode = 'create' | 'enhance' | 'revise'
 
 interface ImageAgentCardRequest {
   id: string
@@ -813,6 +826,32 @@ interface FlashcardAgentGeneratedCard extends Partial<FlashCard> {
   frontImageQuery?: string
   backImageQuery?: string
   imageSources?: Array<{ side: string; query?: string; title?: string; url?: string; provider?: string; error?: string; embedded?: boolean }>
+}
+
+interface AiAgentErrorBody {
+  error?: string
+  code?: string
+  hint?: string
+  details?: string
+}
+
+interface AiAgentRequestError extends Error {
+  code?: string
+  hint?: string
+  details?: string
+  status?: number
+}
+
+function createAiAgentRequestError(response: Response, data: AiAgentErrorBody, fallback: string): AiAgentRequestError {
+  const message = response.status === 404 && !data.error
+    ? 'Local AI API route is not running at /api/flashcard-agent.'
+    : data.error || `${fallback} (${response.status})`
+  const error = new Error(message) as AiAgentRequestError
+  error.code = data.code
+  error.hint = data.hint
+  error.details = data.details
+  error.status = response.status
+  return error
 }
 
 interface ImageCropEditorProps {
@@ -1003,6 +1042,14 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [flashcardAgentBaseUrl, setFlashcardAgentBaseUrl] = useState(() => localStorage.getItem('flashforge_byok_base_url') ?? 'https://api.openai.com/v1')
   const [flashcardAgentModel, setFlashcardAgentModel] = useState(() => localStorage.getItem('flashforge_byok_model') ?? '')
   const [flashcardAgentGenerateText, setFlashcardAgentGenerateText] = useState(true)
+  const [selectedRevisionCardIds, setSelectedRevisionCardIds] = useState<string[]>([])
+  const [revisionDialogOpen, setRevisionDialogOpen] = useState(false)
+  const [revisionFeedback, setRevisionFeedback] = useState('')
+  const [revisionPreview, setRevisionPreview] = useState<FlashcardRevisionCard[] | null>(null)
+  const [revisionLoading, setRevisionLoading] = useState(false)
+  const [revisionError, setRevisionError] = useState<string | null>(null)
+  const [allowRevisionImageChanges, setAllowRevisionImageChanges] = useState(false)
+  const [aiConnectionTestLoading, setAiConnectionTestLoading] = useState(false)
   const [imageAgentSide, setImageAgentSide] = useState<ImageAgentTargetSide>('both')
   const [imageAgentQueryTemplate, setImageAgentQueryTemplate] = useState('{front} funny character clear image')
   const [imageAgentEmbed, setImageAgentEmbed] = useState(true)
@@ -1012,6 +1059,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [imageAgentLog, setImageAgentLog] = useState<string[]>([])
   const [imageAgentProgress, setImageAgentProgress] = useState<{ phase: 'text' | 'images'; done: number; total: number } | null>(null)
   const [imageAgentSummary, setImageAgentSummary] = useState<string | null>(null)
+  const [imageAgentSummaryTone, setImageAgentSummaryTone] = useState<'success' | 'warning' | 'error'>('success')
   const imageAgentCancelRef = useRef<(() => void) | null>(null)
   // Image search provider settings (persisted)
   const [imageBraveKey, setImageBraveKey] = useState(() => localStorage.getItem('flashforge_brave_key') ?? '')
@@ -1022,6 +1070,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [imageProvider, setImageProvider] = useState(() => localStorage.getItem('flashforge_image_provider') ?? 'auto')
   const [imageSearchSettingsOpen, setImageSearchSettingsOpen] = useState(false)
   const [serverSearchConfig, setServerSearchConfig] = useState<Record<string, boolean> | null>(null)
+  const [imageSearchTestLoading, setImageSearchTestLoading] = useState(false)
+  const [imageSearchTestResult, setImageSearchTestResult] = useState<string | null>(null)
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const [previewContainerWidth, setPreviewContainerWidth] = useState(0)
   const previewObserverRef = useRef<ResizeObserver | null>(null)
@@ -1110,6 +1160,168 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       ...prev,
       cards: prev.cards.filter(c => c.id !== id),
     }))
+    setSelectedRevisionCardIds((prev) => prev.filter((cardId) => cardId !== id))
+  }
+
+  function toggleRevisionSelection(id: string, checked: boolean) {
+    setSelectedRevisionCardIds((prev) => {
+      if (checked) return prev.includes(id) ? prev : [...prev, id]
+      return prev.filter((cardId) => cardId !== id)
+    })
+    setRevisionPreview(null)
+    setRevisionError(null)
+  }
+
+  function selectAllRevisionCards() {
+    setSelectedRevisionCardIds(set.cards.map((card) => card.id))
+    setRevisionPreview(null)
+    setRevisionError(null)
+  }
+
+  function clearRevisionSelection() {
+    setSelectedRevisionCardIds([])
+    setRevisionPreview(null)
+    setRevisionError(null)
+  }
+
+  function openRevisionDialog() {
+    if (selectedRevisionCardIds.length === 0) {
+      toast.error('Select one or more cards to revise')
+      return
+    }
+    setFlashcardAgentMode('revise')
+    setRevisionDialogOpen(true)
+    setRevisionError(null)
+  }
+
+  async function testAiConnection() {
+    if (aiConnectionTestLoading || imageAgentLoading || revisionLoading) return
+    if (!flashcardAgentAiKey.trim() || !flashcardAgentModel.trim()) {
+      const explanation = explainAiAgentError(
+        !flashcardAgentAiKey.trim() ? 'Missing BYOK AI API key' : 'Missing AI model name',
+        !flashcardAgentAiKey.trim() ? 'MISSING_API_KEY' : 'MISSING_MODEL',
+      )
+      toast.error(explanation.title, { description: explanation.action })
+      return
+    }
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 20_000)
+    try {
+      setAiConnectionTestLoading(true)
+      const response = await fetch('/api/flashcard-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          mode: 'create',
+          title: 'FlashForge AI connection test',
+          instructions: 'Return exactly one very simple classroom-safe flashcard. Use short text.',
+          count: 1,
+          aiApiKey: flashcardAgentAiKey.trim(),
+          aiBaseUrl: flashcardAgentBaseUrl.trim(),
+          aiModel: flashcardAgentModel.trim(),
+        }),
+      })
+      clearTimeout(timer)
+      const data = await response.json().catch(() => ({ error: 'AI connection test failed' })) as { cards?: FlashcardAgentGeneratedCard[] } & AiAgentErrorBody
+      if (!response.ok) throw createAiAgentRequestError(response, data, 'AI connection test failed')
+      if (!Array.isArray(data.cards) || data.cards.length === 0) throw new Error('AI connection test returned no usable cards')
+      toast.success('AI connection works', { description: 'Key, model, base URL, and JSON response are compatible.' })
+    } catch (error) {
+      const msg = (error as Error).name === 'AbortError'
+        ? 'AI connection test timed out'
+        : error instanceof Error ? error.message : 'AI connection test failed'
+      const requestError = error as AiAgentRequestError
+      const explanation = explainAiAgentError(msg, requestError.code, requestError.hint)
+      toast.error(explanation.title, { description: explanation.action })
+    } finally {
+      clearTimeout(timer)
+      setAiConnectionTestLoading(false)
+    }
+  }
+
+  async function runRevisionAgent() {
+    if (revisionLoading) return
+    const selectedCards = set.cards.filter((card) => selectedRevisionCardIds.includes(card.id))
+    if (selectedCards.length === 0) {
+      toast.error('Select one or more cards to revise')
+      return
+    }
+    if (!revisionFeedback.trim()) {
+      toast.error('Enter revision feedback first')
+      return
+    }
+    if (!flashcardAgentAiKey.trim() || !flashcardAgentModel.trim()) {
+      toast.error('Enter your BYOK AI API key and model first')
+      return
+    }
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 55_000)
+    try {
+      setRevisionLoading(true)
+      setRevisionError(null)
+      const response = await fetch('/api/flashcard-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          mode: 'revise',
+          title: set.title,
+          instructions: revisionFeedback,
+          existingCards: selectedCards.map((card) => ({
+            id: card.id,
+            frontText: card.frontText,
+            backText: card.backText,
+            frontImageUrl: card.frontImageUrl,
+            backImageUrl: card.backImageUrl,
+          })),
+          allowImageRevision: allowRevisionImageChanges,
+          aiApiKey: flashcardAgentAiKey.trim(),
+          aiBaseUrl: flashcardAgentBaseUrl.trim(),
+          aiModel: flashcardAgentModel.trim(),
+        }),
+      })
+      clearTimeout(timer)
+      const data = await response.json().catch(() => ({ error: 'Flashcard revision failed' })) as { cards?: FlashcardRevisionCard[] } & AiAgentErrorBody
+      if (!response.ok) {
+        throw createAiAgentRequestError(response, data, 'Flashcard revision failed')
+      }
+
+      const selectedIds = new Set(selectedCards.map((card) => card.id))
+      const { validCards, unknownIds } = validateRevisionResult(data.cards ?? [], selectedIds)
+      if (validCards.length === 0) throw new Error('AI returned no revisions for the selected cards')
+      setRevisionPreview(validCards)
+      if (unknownIds.length > 0) {
+        setRevisionError(`Ignored ${unknownIds.length} card${unknownIds.length === 1 ? '' : 's'} with unknown ids.`)
+      }
+      toast.success('Revision preview ready')
+    } catch (error) {
+      const msg = (error as Error).name === 'AbortError'
+        ? 'Revision timed out - try fewer cards or shorter feedback'
+        : error instanceof Error ? error.message : 'Flashcard revision failed'
+      const requestError = error as AiAgentRequestError
+      const explanation = explainAiAgentError(msg, requestError.code, requestError.hint)
+      setRevisionError(`${explanation.title}: ${explanation.detail} ${explanation.action}`)
+      toast.error(explanation.title, { description: explanation.action })
+    } finally {
+      clearTimeout(timer)
+      setRevisionLoading(false)
+    }
+  }
+
+  function applyRevisionPreview() {
+    if (!revisionPreview || revisionLoading) return
+    const preview = revisionPreview
+    setRevisionPreview(null)
+    const selectedIds = new Set(selectedRevisionCardIds)
+    updateSet(prev => ({
+      ...prev,
+      cards: mergeRevisedCards(prev.cards, preview, selectedIds, allowRevisionImageChanges),
+    }))
+    setRevisionDialogOpen(false)
+    toast.success('Revision applied')
   }
 
   async function handleImageUpload(cardId: string, file: File, side: 'front' | 'back' | 'both') {
@@ -1247,6 +1459,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
   function openFlashcardAgent() {
     if (set.cards.length === 0) setFlashcardAgentMode('create')
+    else if (flashcardAgentMode === 'revise') setFlashcardAgentMode('enhance')
     setImageAgentOpen(true)
   }
 
@@ -1261,10 +1474,55 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     }
   }
 
+  async function testImageSearchProvider() {
+    const query = 'giraffe'
+    setImageSearchTestLoading(true)
+    setImageSearchTestResult(null)
+    try {
+      const response = await fetch('/api/image-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query,
+          ...getImageSearchKeys(),
+          provider: imageProvider,
+          limit: 1,
+          embedImage: true,
+        }),
+      })
+      const data = await response.json().catch(() => ({ error: 'Image search test failed' })) as {
+        results?: Array<{ title?: string; link?: string; provider?: string }>
+        embedded?: boolean
+        warning?: ImageSearchWarning
+        error?: string
+        code?: string
+        provider?: string
+        hint?: string
+      }
+      if (!response.ok) {
+        const providerLabel = data.provider ? `${data.provider}: ` : ''
+        setImageSearchTestResult(`Failed (${data.code || response.status}): ${providerLabel}${data.error || 'Image search failed'}${data.hint ? ` ${data.hint}` : ''}`)
+        return
+      }
+      const first = data.results?.[0]
+      const domain = first?.link ? new URL(first.link).hostname : 'no image URL'
+      const providerLabel = first?.provider || data.provider || imageProvider
+      const embedNote = data.embedded ? 'embedded' : data.warning?.code === 'image_embed_failed' ? 'remote URL fallback' : 'remote URL'
+      setImageSearchTestResult(`OK: ${providerLabel} returned ${data.results?.length ?? 0} result for "${query}" (${first?.title || 'untitled'} from ${domain}; ${embedNote}).`)
+    } catch (error) {
+      setImageSearchTestResult(error instanceof Error ? `Failed: ${error.message}` : 'Failed: Image search test could not run')
+    } finally {
+      setImageSearchTestLoading(false)
+    }
+  }
+
   async function fetchImageForQuery(
     query: string,
     signal: AbortSignal,
-  ): Promise<{ imageUrl: string; embedded: boolean; title?: string } | null> {
+  ): Promise<
+    | { ok: true; imageUrl: string; embedded: boolean; title?: string; warning?: ImageSearchWarning }
+    | { ok: false; error: string; code?: string; provider?: string; hint?: string }
+  > {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 25_000)
     // Combine external signal with per-request timeout
@@ -1283,10 +1541,29 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         }),
       })
       clearTimeout(timeoutId)
-      if (!response.ok) return null
-      const data = await response.json() as { results?: Array<{ link: string; title?: string }>; dataUrl?: string; embedded?: boolean }
+      const data = await response.json().catch(() => ({ error: 'Image search failed' })) as {
+        results?: Array<{ link: string; title?: string }>
+        dataUrl?: string
+        embedded?: boolean
+        warning?: ImageSearchWarning
+        error?: string
+        code?: string
+        provider?: string
+        hint?: string
+      }
+      if (!response.ok) {
+        return {
+          ok: false,
+          error: data.error || `Image search failed (${response.status})`,
+          code: data.code,
+          provider: data.provider,
+          hint: data.hint,
+        }
+      }
       const result = data.results?.[0]
-      if (!result?.link && !data.dataUrl) return null
+      if (!result?.link && !data.dataUrl) {
+        return { ok: false, error: 'Provider returned 0 image results', code: 'provider_zero_results' }
+      }
       let imageUrl = data.dataUrl || result!.link
       let embedded = Boolean(data.embedded)
       // Client-side compress if it's a data URL (from server embed) — keeps localStorage small
@@ -1296,20 +1573,22 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           embedded = true
         } catch { /* keep original */ }
       }
-      return { imageUrl, embedded, title: result?.title }
+      return { ok: true, imageUrl, embedded, title: result?.title, warning: data.warning }
     } catch {
       clearTimeout(timeoutId)
-      return null
+      if (signal.aborted) return { ok: false, error: 'Image search cancelled', code: 'image_cancelled' }
+      return { ok: false, error: 'Local image search API is unavailable or timed out', code: 'image_route_unavailable' }
     }
   }
 
   async function runImageAgent() {
+    if (imageAgentLoading) return
     if (!imageAgentAcceptedRisk) {
       toast.error('Please accept the image-use responsibility notice first')
       return
     }
 
-    const needsAi = flashcardAgentMode === 'create' || flashcardAgentGenerateText
+    const needsAi = flashcardAgentMode === 'create' || (flashcardAgentMode === 'enhance' && flashcardAgentGenerateText)
     if (needsAi && (!flashcardAgentAiKey.trim() || !flashcardAgentModel.trim())) {
       toast.error('Enter your BYOK AI API key and model first, or turn off text generation for image-only enhancement')
       return
@@ -1331,6 +1610,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     try {
       setImageAgentLoading(true)
       setImageAgentSummary(null)
+      setImageAgentSummaryTone('success')
       setImageAgentLog([])
       setImageAgentProgress(null)
 
@@ -1340,47 +1620,80 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       if (needsAi) {
         const requestedCount = Math.max(1, Math.min(Number(flashcardAgentCount || 24), 60))
         const batchSize = 20
-        const batchTotal = flashcardAgentMode === 'create' ? Math.ceil(requestedCount / batchSize) : 1
+        const minimumBatches = flashcardAgentMode === 'create' ? Math.ceil(requestedCount / batchSize) : 1
+        const maxTextAttempts = flashcardAgentMode === 'create' ? minimumBatches + 3 : 1
 
-        setImageAgentProgress({ phase: 'text', done: 0, total: batchTotal })
-        setImageAgentLog([`Generating text for ${requestedCount} card${requestedCount === 1 ? '' : 's'} (${batchTotal} batch${batchTotal === 1 ? '' : 'es'})...`])
+        setImageAgentProgress({ phase: 'text', done: 0, total: maxTextAttempts })
+        setImageAgentLog([`Generating text for ${requestedCount} card${requestedCount === 1 ? '' : 's'} (${minimumBatches} batch${minimumBatches === 1 ? '' : 'es'} minimum)...`])
 
-        for (let batchIndex = 0; batchIndex < batchTotal; batchIndex += 1) {
+        for (let batchIndex = 0; batchIndex < maxTextAttempts; batchIndex += 1) {
           if (abortController.signal.aborted) break
+          if (flashcardAgentMode === 'create' && generatedCards.length >= requestedCount) break
           const batchCount = flashcardAgentMode === 'create' ? Math.min(batchSize, requestedCount - generatedCards.length) : requestedCount
-          setImageAgentLog((prev) => [...prev, `Batch ${batchIndex + 1}/${batchTotal}: generating ${batchCount} card${batchCount === 1 ? '' : 's'}...`])
+          setImageAgentLog((prev) => [...prev, `Batch ${batchIndex + 1}/${maxTextAttempts}: generating ${batchCount} card${batchCount === 1 ? '' : 's'}...`])
 
           const batchController = new AbortController()
+          imageAgentCancelRef.current = () => {
+            abortController.abort()
+            batchController.abort()
+          }
           const batchTimer = setTimeout(() => batchController.abort(), 55_000)
           try {
+            const batchSignal = AbortSignal.any ? AbortSignal.any([abortController.signal, batchController.signal]) : batchController.signal
             const response = await fetch('/api/flashcard-agent', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              signal: batchController.signal,
+              signal: batchSignal,
               body: JSON.stringify({
                 mode: flashcardAgentMode,
                 title: set.title,
                 instructions: flashcardAgentInstructions,
                 count: batchCount,
                 existingFronts: [...set.cards, ...generatedCards].map((c) => c.frontText).filter(Boolean).slice(0, 60),
+                existingCards: flashcardAgentMode === 'enhance'
+                  ? set.cards.map((card) => ({
+                    id: card.id,
+                    frontText: card.frontText,
+                    backText: card.backText,
+                    frontImageUrl: card.frontImageUrl,
+                    backImageUrl: card.backImageUrl,
+                  }))
+                  : undefined,
                 aiApiKey: flashcardAgentAiKey.trim(),
                 aiBaseUrl: flashcardAgentBaseUrl.trim(),
                 aiModel: flashcardAgentModel.trim(),
               }),
             })
             clearTimeout(batchTimer)
-            const data = await response.json().catch(() => ({ error: 'Flashcard Agent failed' })) as { cards?: FlashcardAgentGeneratedCard[]; error?: string }
-            if (!response.ok) throw new Error(data.error || 'Flashcard Agent failed')
-            generatedCards.push(...(data.cards ?? []))
-            setImageAgentProgress({ phase: 'text', done: batchIndex + 1, total: batchTotal })
+            const data = await response.json().catch(() => ({ error: 'Flashcard Agent failed' })) as { cards?: FlashcardAgentGeneratedCard[] } & AiAgentErrorBody
+            if (!response.ok) {
+              throw createAiAgentRequestError(response, data, 'Flashcard Agent failed')
+            }
+            const returnedCards = data.cards ?? []
+            const usableCards = flashcardAgentMode === 'create'
+              ? returnedCards.slice(0, Math.max(0, requestedCount - generatedCards.length))
+              : returnedCards
+            generatedCards.push(...usableCards)
+            setImageAgentProgress({ phase: 'text', done: batchIndex + 1, total: maxTextAttempts })
+            if (flashcardAgentMode === 'create' && usableCards.length === 0) break
           } catch (error) {
             clearTimeout(batchTimer)
-            if ((error as Error).name === 'AbortError') throw new Error('Text generation timed out — try a smaller deck or faster model')
+            if ((error as Error).name === 'AbortError') {
+              if (abortController.signal.aborted) throw new Error('Flashcard Agent cancelled')
+              throw new Error('Text generation timed out — try a smaller deck or faster model')
+            }
             throw error
+          } finally {
+            imageAgentCancelRef.current = () => abortController.abort()
           }
         }
 
+        if (abortController.signal.aborted) throw new Error('Flashcard Agent cancelled')
         if (generatedCards.length === 0) throw new Error('Flashcard Agent returned no cards')
+        if (flashcardAgentMode === 'create' && generatedCards.length < requestedCount) {
+          setImageAgentSummaryTone('warning')
+          setImageAgentLog((prev) => [...prev, `⚠ Generated ${generatedCards.length} of ${requestedCount}; the model returned fewer usable cards after retries.`])
+        }
 
         setImageAgentLog((prev) => [...prev, `✓ Generated ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} — now searching for images...`])
 
@@ -1425,11 +1738,21 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         for (const card of generatedCards) {
           if (abortController.signal.aborted) break
           if (imageAgentSide === 'front' || imageAgentSide === 'both') {
-            const query = card.frontImageQuery || card.frontText
+            const query = normalizeImageQuery({
+              side: 'front',
+              frontText: card.frontText,
+              backText: card.backText,
+              aiQuery: card.frontImageQuery,
+            })
             if (query) imageTasks.push({ cardId: card.id, side: 'front', query })
           }
           if (imageAgentSide === 'back' || imageAgentSide === 'both') {
-            const query = card.backImageQuery || card.backText
+            const query = normalizeImageQuery({
+              side: 'back',
+              frontText: card.frontText,
+              backText: card.backText,
+              aiQuery: card.backImageQuery,
+            })
             if (query) imageTasks.push({ cardId: card.id, side: 'back', query })
           }
         }
@@ -1443,12 +1766,30 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         for (const card of targetCards) {
           if (imageAgentSide === 'front' || imageAgentSide === 'both') {
             if (!card.frontImageUrl || imageAgentOverwrite) {
-              imageTasks.push({ cardId: card.id, side: 'front', query: buildImageAgentQuery(card, 'front') })
+              imageTasks.push({
+                cardId: card.id,
+                side: 'front',
+                query: normalizeImageQuery({
+                  side: 'front',
+                  frontText: card.frontText,
+                  backText: card.backText,
+                  aiQuery: buildImageAgentQuery(card, 'front'),
+                }),
+              })
             }
           }
           if (imageAgentSide === 'back' || imageAgentSide === 'both') {
             if (!card.backImageUrl || imageAgentOverwrite) {
-              imageTasks.push({ cardId: card.id, side: 'back', query: buildImageAgentQuery(card, 'back') })
+              imageTasks.push({
+                cardId: card.id,
+                side: 'back',
+                query: normalizeImageQuery({
+                  side: 'back',
+                  frontText: card.frontText,
+                  backText: card.backText,
+                  aiQuery: buildImageAgentQuery(card, 'back'),
+                }),
+              })
             }
           }
         }
@@ -1461,12 +1802,13 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         let imagesDone = 0
         let imagesApplied = 0
         let imagesFailed = 0
+        const imageFailureReasons = new Map<string, number>()
 
         async function processImageTask(task: ImageTask) {
           if (abortController.signal.aborted) return
           const result = await fetchImageForQuery(task.query, abortController.signal)
           imagesDone++
-          if (result) {
+          if (result.ok) {
             imagesApplied++
             // Update workingCards directly — no stale-closure risk
             const cardIndex = workingCards.findIndex((c) => c.id === task.cardId)
@@ -1479,10 +1821,18 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                   : { backImageUrl: result.imageUrl, backImageScale: 1, backImageOffsetX: 0, backImageOffsetY: 0 }),
               }
             }
-            setImageAgentLog((prev) => [...prev, `✓ ${task.side}: ${task.query}${result.embedded ? ' (embedded)' : ''}`])
+            const warning = result.warning?.code === 'image_embed_failed'
+              ? ' — found image; embed failed, using remote URL'
+              : ''
+            setImageAgentLog((prev) => [...prev, `✓ ${task.side}: ${task.query}${result.embedded ? ' (embedded)' : ''}${warning}`])
           } else if (!abortController.signal.aborted) {
             imagesFailed++
-            setImageAgentLog((prev) => [...prev, `✕ ${task.side}: ${task.query}: no image found`])
+            const reason = result.provider
+              ? `${result.provider}: ${result.error}`
+              : result.error
+            imageFailureReasons.set(reason, (imageFailureReasons.get(reason) ?? 0) + 1)
+            const hint = result.hint ? ` ${result.hint}` : ''
+            setImageAgentLog((prev) => [...prev, `✕ ${task.side}: ${task.query} — ${reason}.${hint}`])
           }
           setImageAgentProgress({ phase: 'images', done: imagesDone, total: imageTasks.length })
           // Persist periodically so partial results are not lost on error/cancel
@@ -1504,29 +1854,64 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         persistWorkingState()
 
         const wasCancelled = abortController.signal.aborted
+        const imageOutcome = getImageAgentOutcome(imageTasks.length, imagesApplied)
+        const topReasons = [...imageFailureReasons.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 2)
+          .map(([reason, count]) => `${reason}${count > 1 ? ` (${count})` : ''}`)
+          .join('; ')
         const logSummary = wasCancelled
           ? `Cancelled — saved ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}`
-          : `✓ Done: ${imagesApplied} image${imagesApplied === 1 ? '' : 's'} found${imagesFailed > 0 ? `, ${imagesFailed} not found` : ''}`
+          : imageOutcome === 'failed'
+            ? `✕ Image step failed: 0 images found, ${imagesFailed} failed${topReasons ? ` — ${topReasons}` : ''}`
+            : imageOutcome === 'partial'
+              ? `⚠ Partial image step: ${imagesApplied} image${imagesApplied === 1 ? '' : 's'} found, ${imagesFailed} failed${topReasons ? ` — ${topReasons}` : ''}`
+              : `✓ Done: ${imagesApplied} image${imagesApplied === 1 ? '' : 's'} found`
         setImageAgentLog((prev) => [logSummary, ...prev])
         if (wasCancelled) {
+          setImageAgentSummaryTone(imagesApplied > 0 ? 'warning' : 'error')
           toast.message(`Cancelled — kept ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}`)
+        } else if (imageOutcome === 'failed') {
+          setImageAgentSummaryTone('error')
+          const summary = needsAi
+            ? `Created ${generatedCards.length} text card${generatedCards.length === 1 ? '' : 's'} · image step failed`
+            : `Image step failed · 0 of ${imageTasks.length} images applied`
+          toast.error('Image step failed', { description: topReasons || 'No images were applied. Text cards were kept.' })
+          setImageAgentSummary(summary)
+        } else if (imageOutcome === 'partial') {
+          setImageAgentSummaryTone('warning')
+          toast.message(needsAi
+            ? `Created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} with ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}; ${imagesFailed} failed`
+            : `Applied ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}; ${imagesFailed} failed`)
+          setImageAgentSummary(needsAi
+            ? `Created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} · ${imagesApplied} image${imagesApplied === 1 ? '' : 's'} found · ${imagesFailed} failed`
+            : `${imagesApplied} image${imagesApplied === 1 ? '' : 's'} applied · ${imagesFailed} failed`)
         } else {
+          setImageAgentSummaryTone('success')
           toast.success(needsAi
             ? `Agent created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} with ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}`
-            : `Applied ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}${imagesFailed > 0 ? `; ${imagesFailed} not found` : ''}`)
+            : `Applied ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}`)
           setImageAgentSummary(needsAi
-            ? `Created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} · ${imagesApplied} image${imagesApplied === 1 ? '' : 's'} found${imagesFailed > 0 ? ` · ${imagesFailed} not found` : ''}`
-            : `${imagesApplied} image${imagesApplied === 1 ? '' : 's'} applied${imagesFailed > 0 ? ` · ${imagesFailed} not found` : ''}`)
+            ? `Created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} · ${imagesApplied} image${imagesApplied === 1 ? '' : 's'} found`
+            : `${imagesApplied} image${imagesApplied === 1 ? '' : 's'} applied`)
         }
       } else if (needsAi) {
         persistWorkingState()
+        setImageAgentSummaryTone('success')
         toast.success(`Agent created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'}`)
         setImageAgentSummary(`Created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'}`)
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Flashcard Agent failed'
-      setImageAgentLog((prev) => [`✕ Error: ${msg}`, ...prev])
-      toast.error(msg)
+      if (msg === 'Flashcard Agent cancelled') {
+        setImageAgentLog((prev) => ['Cancelled before new cards were created', ...prev])
+        toast.message('Flashcard Agent cancelled')
+      } else {
+        const requestError = error as AiAgentRequestError
+        const explanation = explainAiAgentError(msg, requestError.code, requestError.hint)
+        setImageAgentLog((prev) => [`✕ ${formatAiAgentError(msg, requestError.code, requestError.hint)}`, ...prev])
+        toast.error(explanation.title, { description: explanation.action })
+      }
       // Preserve any partial progress already accumulated
       if (hasNewContent) persistWorkingState()
     } finally {
@@ -1581,6 +1966,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     set.printSettings.orientation
   )
   const pages = paginateCardsFixedLength(set.cards, set.printSettings.cardsPerPage)
+  const selectedRevisionCards = set.cards.filter((card) => selectedRevisionCardIds.includes(card.id))
+  const revisionOriginalById = new Map(set.cards.map((card) => [card.id, card]))
 
   return (
       <div className="space-y-8">
@@ -1699,11 +2086,41 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               </CardContent>
             </Card>
           ) : (
-            set.cards.map((card, index) => (
+            <>
+              <Card className="border-2 shadow-sm">
+                <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="font-semibold">AI revision</p>
+                    <p className="text-sm text-muted-foreground">{selectedRevisionCardIds.length} of {set.cards.length} selected</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" size="sm" onClick={selectAllRevisionCards}>
+                      Select all
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={clearRevisionSelection} disabled={selectedRevisionCardIds.length === 0}>
+                      Clear selection
+                    </Button>
+                    <Button size="sm" onClick={openRevisionDialog} disabled={selectedRevisionCardIds.length === 0}>
+                      <Sparkle className="mr-2" weight="bold" />
+                      Revise selected with AI
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {set.cards.map((card, index) => (
               <Card key={card.id} className="shadow-md border-2 hover:border-primary/30 transition-colors">
                 <CardHeader className="bg-muted/30">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-xl font-bold">Card {index + 1}</CardTitle>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <label className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4"
+                        checked={selectedRevisionCardIds.includes(card.id)}
+                        onChange={(event) => toggleRevisionSelection(card.id, event.target.checked)}
+                      />
+                      <CardTitle className="text-xl font-bold">Card {index + 1}</CardTitle>
+                    </label>
                     <Button
                       variant="destructive"
                       size="sm"
@@ -1913,7 +2330,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                   </div>
                 </CardContent>
               </Card>
-            ))
+              ))}
+            </>
           )}
         </TabsContent>
 
@@ -2105,7 +2523,137 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         )}
       </Tabs>
 
-      <Dialog open={imageAgentOpen} onOpenChange={setImageAgentOpen}>
+      <Dialog open={revisionDialogOpen} onOpenChange={(open) => {
+        if (revisionLoading && !open) return
+        setRevisionDialogOpen(open)
+      }}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Revise selected cards with AI</DialogTitle>
+            <DialogDescription>
+              Review the proposed changes before applying them to the selected cards.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-5">
+            <div className="rounded-md border p-3 text-sm">
+              <p className="font-medium">{selectedRevisionCards.length} selected card{selectedRevisionCards.length === 1 ? '' : 's'}</p>
+              <p className="text-muted-foreground">Unselected cards will not be changed.</p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="revision-feedback">Revision feedback</Label>
+              <Textarea
+                id="revision-feedback"
+                value={revisionFeedback}
+                onChange={(event) => setRevisionFeedback(event.target.value)}
+                rows={4}
+                placeholder="Make these easier. Fix unnatural English. Make answers shorter. Use British spelling."
+                disabled={revisionLoading}
+              />
+            </div>
+
+            <label className="flex items-start gap-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={allowRevisionImageChanges}
+                disabled={revisionLoading}
+                onChange={(event) => setAllowRevisionImageChanges(event.target.checked)}
+              />
+              <span>Allow image replacement suggestions. Pixel edits are not supported; use image search or crop/reframe controls after applying text changes.</span>
+            </label>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="space-y-2 sm:col-span-1">
+                <Label htmlFor="revision-agent-model">AI model</Label>
+                <Input id="revision-agent-model" value={flashcardAgentModel} onChange={(event) => setFlashcardAgentModel(event.target.value)} placeholder="your-provider-model" disabled={revisionLoading} />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="revision-agent-base-url">OpenAI-compatible base URL</Label>
+                <Input id="revision-agent-base-url" value={flashcardAgentBaseUrl} onChange={(event) => setFlashcardAgentBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" disabled={revisionLoading} />
+              </div>
+              <div className="space-y-2 sm:col-span-3">
+                <Label htmlFor="revision-agent-ai-key">BYOK AI API key</Label>
+                <Input id="revision-agent-ai-key" type="password" value={flashcardAgentAiKey} onChange={(event) => setFlashcardAgentAiKey(event.target.value)} placeholder="Only sent to your chosen provider when you run revision" disabled={revisionLoading} />
+              </div>
+            </div>
+
+            {revisionError && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                {revisionError}
+              </div>
+            )}
+
+            {revisionPreview && (
+              <div className="max-h-80 space-y-3 overflow-y-auto rounded-md border p-3">
+                {revisionPreview.map((card, index) => {
+                  const original = revisionOriginalById.get(card.id)
+                  const changes = original ? getChangedFields(original, card) : []
+                  return (
+                    <div key={card.id} className="rounded-md border p-3">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <p className="font-semibold">Card {set.cards.findIndex((item) => item.id === card.id) + 1 || index + 1}</p>
+                        <p className="text-xs text-muted-foreground">{changes.length} change{changes.length === 1 ? '' : 's'}</p>
+                      </div>
+                      {changes.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No changes returned for this card.</p>
+                      ) : (
+                        <div className="space-y-3">
+                          {changes.map((change) => (
+                            <div key={`${card.id}-${change.field}`} className="grid gap-2 text-sm sm:grid-cols-2">
+                              <div>
+                                <p className="text-xs font-semibold uppercase text-muted-foreground">
+                                  {change.field === 'frontText' ? 'Front before'
+                                    : change.field === 'backText' ? 'Back before'
+                                      : change.field === 'frontImageQuery' ? 'Front image query'
+                                        : 'Back image query'}
+                                </p>
+                                <p className="rounded bg-muted p-2">{change.before || 'No existing value'}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs font-semibold uppercase text-muted-foreground">
+                                  {change.field === 'frontText' ? 'Front after'
+                                    : change.field === 'backText' ? 'Back after'
+                                      : 'Suggested query'}
+                                </p>
+                                <p className="rounded bg-primary/10 p-2">{change.after}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button variant="outline" onClick={testAiConnection} disabled={aiConnectionTestLoading || revisionLoading}>
+                <Sparkle className="mr-2" weight="bold" />
+                {aiConnectionTestLoading ? 'Testing...' : 'Test AI connection'}
+              </Button>
+              <Button variant="outline" onClick={() => setRevisionDialogOpen(false)} disabled={revisionLoading}>
+                Cancel
+              </Button>
+              <Button variant="outline" onClick={runRevisionAgent} disabled={revisionLoading}>
+                <Sparkle className="mr-2" weight="bold" />
+                {revisionLoading ? 'Revising...' : revisionPreview ? 'Rerun revision' : 'Preview revision'}
+              </Button>
+              <Button onClick={applyRevisionPreview} disabled={!revisionPreview || revisionLoading}>
+                <CheckCircle className="mr-2" weight="bold" />
+                Apply revision
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={imageAgentOpen} onOpenChange={(open) => {
+        if (imageAgentLoading && !open) return
+        setImageAgentOpen(open)
+      }}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>AI Flashcard Agent (BYOK)</DialogTitle>
@@ -2131,8 +2679,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="flashcard-agent-mode">Agent mode</Label>
-                <Select value={flashcardAgentMode} onValueChange={(value) => setFlashcardAgentMode(value as FlashcardAgentMode)}>
-                  <SelectTrigger id="flashcard-agent-mode"><SelectValue /></SelectTrigger>
+                <Select value={flashcardAgentMode} onValueChange={(value) => {
+                  if (!imageAgentLoading) setFlashcardAgentMode(value as FlashcardAgentMode)
+                }}>
+                  <SelectTrigger id="flashcard-agent-mode" disabled={imageAgentLoading}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="enhance">Enhance current cards</SelectItem>
                     <SelectItem value="create">Create new cards</SelectItem>
@@ -2141,36 +2691,38 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               </div>
               <div className="space-y-2">
                 <Label htmlFor="flashcard-agent-count">Deck size / new cards</Label>
-                <Input id="flashcard-agent-count" type="number" min="1" max="60" value={flashcardAgentCount} onChange={(event) => setFlashcardAgentCount(event.target.value)} />
+                <Input id="flashcard-agent-count" type="number" min="1" max="60" value={flashcardAgentCount} onChange={(event) => setFlashcardAgentCount(event.target.value)} disabled={imageAgentLoading} />
                 <p className="text-xs text-muted-foreground">Default 24. Max 60 per run (larger = slower).</p>
               </div>
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="flashcard-agent-instructions">Agent instructions</Label>
-              <Textarea id="flashcard-agent-instructions" value={flashcardAgentInstructions} onChange={(event) => setFlashcardAgentInstructions(event.target.value)} rows={3} />
+              <Textarea id="flashcard-agent-instructions" value={flashcardAgentInstructions} onChange={(event) => setFlashcardAgentInstructions(event.target.value)} rows={3} disabled={imageAgentLoading} />
             </div>
 
             <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-2 sm:col-span-1">
                 <Label htmlFor="flashcard-agent-model">AI model</Label>
-                <Input id="flashcard-agent-model" value={flashcardAgentModel} onChange={(event) => setFlashcardAgentModel(event.target.value)} placeholder="your-provider-model" />
+                <Input id="flashcard-agent-model" value={flashcardAgentModel} onChange={(event) => setFlashcardAgentModel(event.target.value)} placeholder="your-provider-model" disabled={imageAgentLoading} />
               </div>
               <div className="space-y-2 sm:col-span-2">
                 <Label htmlFor="flashcard-agent-base-url">OpenAI-compatible base URL</Label>
-                <Input id="flashcard-agent-base-url" value={flashcardAgentBaseUrl} onChange={(event) => setFlashcardAgentBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" />
+                <Input id="flashcard-agent-base-url" value={flashcardAgentBaseUrl} onChange={(event) => setFlashcardAgentBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" disabled={imageAgentLoading} />
               </div>
               <div className="space-y-2 sm:col-span-3">
                 <Label htmlFor="flashcard-agent-ai-key">BYOK AI API key</Label>
-                <Input id="flashcard-agent-ai-key" type="password" value={flashcardAgentAiKey} onChange={(event) => setFlashcardAgentAiKey(event.target.value)} placeholder="Required for full-deck AI generation; only sent to your chosen provider when you run the agent" />
+                <Input id="flashcard-agent-ai-key" type="password" value={flashcardAgentAiKey} onChange={(event) => setFlashcardAgentAiKey(event.target.value)} placeholder="Required for full-deck AI generation; only sent to your chosen provider when you run the agent" disabled={imageAgentLoading} />
               </div>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="image-agent-side">Apply images to</Label>
-                <Select value={imageAgentSide} onValueChange={(value) => setImageAgentSide(value as ImageAgentTargetSide)}>
-                  <SelectTrigger id="image-agent-side">
+                <Select value={imageAgentSide} onValueChange={(value) => {
+                  if (!imageAgentLoading) setImageAgentSide(value as ImageAgentTargetSide)
+                }}>
+                  <SelectTrigger id="image-agent-side" disabled={imageAgentLoading}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -2184,15 +2736,15 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 <Label>Options</Label>
                 <div className="space-y-2 rounded-md border p-3 text-sm">
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={flashcardAgentGenerateText} onChange={(event) => setFlashcardAgentGenerateText(event.target.checked)} />
+                    <input type="checkbox" checked={flashcardAgentGenerateText} disabled={imageAgentLoading} onChange={(event) => setFlashcardAgentGenerateText(event.target.checked)} />
                     Let AI create/rewrite front and back text
                   </label>
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={imageAgentOverwrite} onChange={(event) => setImageAgentOverwrite(event.target.checked)} />
+                    <input type="checkbox" checked={imageAgentOverwrite} disabled={imageAgentLoading} onChange={(event) => setImageAgentOverwrite(event.target.checked)} />
                     Overwrite existing images
                   </label>
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={imageAgentEmbed} onChange={(event) => setImageAgentEmbed(event.target.checked)} />
+                    <input type="checkbox" checked={imageAgentEmbed} disabled={imageAgentLoading} onChange={(event) => setImageAgentEmbed(event.target.checked)} />
                     Download/embed images when possible
                   </label>
                   <p className="text-xs text-muted-foreground">Agent-added images start centered with the existing crop controls set to neutral zoom/offset; you can still fine-tune each card manually.</p>
@@ -2207,6 +2759,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 value={imageAgentQueryTemplate}
                 onChange={(event) => setImageAgentQueryTemplate(event.target.value)}
                 placeholder="{front} funny character clear image"
+                disabled={imageAgentLoading}
               />
               <p className="text-xs text-muted-foreground">
                 Variables: {'{front}'}, {'{back}'}, {'{text}'}, {'{title}'}, {'{side}'}. Example: {'{front} funny character Japanese students recognize'}.
@@ -2214,6 +2767,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
             </div>
 
             <div className="flex flex-wrap justify-end gap-2">
+              <Button variant="outline" onClick={testAiConnection} disabled={aiConnectionTestLoading || imageAgentLoading}>
+                <Sparkle className="mr-2" weight="bold" />
+                {aiConnectionTestLoading ? 'Testing...' : 'Test AI connection'}
+              </Button>
               <Button variant="outline" onClick={() => setImageSearchSettingsOpen(true)}>
                 <Gear className="mr-2" weight="bold" />
                 Image Search Settings
@@ -2245,7 +2802,13 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
             )}
 
             {imageAgentSummary && !imageAgentLoading && (
-              <p className="text-sm font-medium text-green-700 dark:text-green-400">{imageAgentSummary}</p>
+              <p className={
+                imageAgentSummaryTone === 'error'
+                  ? 'text-sm font-medium text-red-700 dark:text-red-400'
+                  : imageAgentSummaryTone === 'warning'
+                    ? 'text-sm font-medium text-amber-700 dark:text-amber-400'
+                    : 'text-sm font-medium text-green-700 dark:text-green-400'
+              }>{imageAgentSummary}</p>
             )}
 
             {imageAgentLog.length > 0 && (
@@ -2333,7 +2896,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                   <SelectItem value="openverse">Openverse (no key needed)</SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">Auto priority: Brave → Google → Pexels → Pixabay → Openverse. Openverse always available as keyless fallback.</p>
+              <p className="text-xs text-muted-foreground">Auto priority: Google → Brave → Pixabay → Pexels → Openverse. Openverse always available as keyless fallback.</p>
             </div>
 
             <div className="space-y-3">
@@ -2376,6 +2939,23 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                   {serverSearchConfig.openverse && <span> Openverse is always available.</span>}
                 </div>
               )}
+              <div className="rounded-md border p-3 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="font-medium">Provider test</p>
+                    <p className="text-xs text-muted-foreground">Runs "giraffe" through the selected provider/Auto path without showing keys.</p>
+                  </div>
+                  <Button type="button" variant="outline" onClick={testImageSearchProvider} disabled={imageSearchTestLoading}>
+                    <MagnifyingGlass className="mr-2" weight="bold" />
+                    {imageSearchTestLoading ? 'Testing...' : 'Test image search'}
+                  </Button>
+                </div>
+                {imageSearchTestResult && (
+                  <p className={`mt-3 text-xs ${imageSearchTestResult.startsWith('OK:') ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
+                    {imageSearchTestResult}
+                  </p>
+                )}
+              </div>
             </div>
 
             <div className="flex justify-end">
