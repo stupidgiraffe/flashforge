@@ -21,8 +21,8 @@ import { FlashCardDisplay } from '@/components/FlashCardDisplay'
 import { ImagePlacementEditor } from '@/components/ImagePlacementEditor'
 import { generateTestQuestions } from '@/lib/test-utils'
 import { calculatePrintLayout, paginateCardsFixedLength, calculateBackPagePositions } from '@/lib/print-utils'
-import { getChangedFields, mergeRevisedCards, validateRevisionResult } from '@/lib/flashcard-revision'
-import type { FlashcardRevisionCard } from '@/lib/flashcard-revision'
+import { applyRevisionPatches, getPatchChanges, validateRevisionPatches } from '@/lib/flashcard-revision'
+import type { RevisionPatchOperation, RevisionScope } from '@/lib/flashcard-revision'
 import { explainAiAgentError, formatAiAgentError } from '@/lib/ai-agent-errors'
 import { buildImageSearchIntent, getImageAgentOutcome } from '@/lib/image-agent'
 import { DEFAULT_IMAGE_PLACEMENT, getCardSideImage, imageAssetFromCandidate } from '@/lib/image-placement'
@@ -860,10 +860,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [selectedRevisionCardIds, setSelectedRevisionCardIds] = useState<string[]>([])
   const [revisionDialogOpen, setRevisionDialogOpen] = useState(false)
   const [revisionFeedback, setRevisionFeedback] = useState('')
-  const [revisionPreview, setRevisionPreview] = useState<FlashcardRevisionCard[] | null>(null)
+  const [revisionPreview, setRevisionPreview] = useState<RevisionPatchOperation[] | null>(null)
   const [revisionLoading, setRevisionLoading] = useState(false)
   const [revisionError, setRevisionError] = useState<string | null>(null)
-  const [allowRevisionImageChanges, setAllowRevisionImageChanges] = useState(false)
+  const [revisionScope, setRevisionScope] = useState<RevisionScope>('both')
   const [aiConnectionTestLoading, setAiConnectionTestLoading] = useState(false)
   const [imageAgentSide, setImageAgentSide] = useState<ImageAgentTargetSide>('both')
   const [imageAgentQueryTemplate, setImageAgentQueryTemplate] = useState('{front} funny character clear image')
@@ -999,11 +999,13 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     setRevisionError(null)
   }
 
-  function openRevisionDialog() {
-    if (selectedRevisionCardIds.length === 0) {
+  function openRevisionDialog(target: 'selected' | 'all' = 'selected') {
+    const targetIds = target === 'all' ? set.cards.map((card) => card.id) : selectedRevisionCardIds
+    if (targetIds.length === 0) {
       toast.error('Select one or more cards to revise')
       return
     }
+    setSelectedRevisionCardIds(targetIds)
     setFlashcardAgentMode('revise')
     setRevisionDialogOpen(true)
     setRevisionError(null)
@@ -1085,31 +1087,33 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           mode: 'revise',
           title: set.title,
           instructions: revisionFeedback,
+          revisionScope,
           existingCards: selectedCards.map((card) => ({
             id: card.id,
             frontText: card.frontText,
             backText: card.backText,
-            frontImageUrl: card.frontImageUrl,
-            backImageUrl: card.backImageUrl,
+            frontImageUrl: card.frontImage?.originalUrl || card.frontImageUrl,
+            backImageUrl: card.backImage?.originalUrl || card.backImageUrl,
           })),
-          allowImageRevision: allowRevisionImageChanges,
           aiApiKey: flashcardAgentAiKey.trim(),
           aiBaseUrl: flashcardAgentBaseUrl.trim(),
           aiModel: flashcardAgentModel.trim(),
         }),
       })
       clearTimeout(timer)
-      const data = await response.json().catch(() => ({ error: 'Flashcard revision failed' })) as { cards?: FlashcardRevisionCard[] } & AiAgentErrorBody
+      const data = await response.json().catch(() => ({ error: 'Flashcard revision failed' })) as {
+        patches?: RevisionPatchOperation[]
+      } & AiAgentErrorBody
       if (!response.ok) {
         throw createAiAgentRequestError(response, data, 'Flashcard revision failed')
       }
 
       const selectedIds = new Set(selectedCards.map((card) => card.id))
-      const { validCards, unknownIds } = validateRevisionResult(data.cards ?? [], selectedIds)
-      if (validCards.length === 0) throw new Error('AI returned no revisions for the selected cards')
-      setRevisionPreview(validCards)
-      if (unknownIds.length > 0) {
-        setRevisionError(`Ignored ${unknownIds.length} card${unknownIds.length === 1 ? '' : 's'} with unknown ids.`)
+      const { validPatches, rejected } = validateRevisionPatches(data.patches ?? [], selectedIds, revisionScope)
+      if (validPatches.length === 0) throw new Error('AI returned no valid changes for the selected cards and scope')
+      setRevisionPreview(validPatches)
+      if (rejected.length > 0) {
+        setRevisionError(`Ignored ${rejected.length} invalid or out-of-scope operation${rejected.length === 1 ? '' : 's'}.`)
       }
       toast.success('Revision preview ready')
     } catch (error) {
@@ -1126,17 +1130,64 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     }
   }
 
-  function applyRevisionPreview() {
+  async function applyRevisionPreview() {
     if (!revisionPreview || revisionLoading) return
     const preview = revisionPreview
-    setRevisionPreview(null)
     const selectedIds = new Set(selectedRevisionCardIds)
-    updateSet(prev => ({
-      ...prev,
-      cards: mergeRevisedCards(prev.cards, preview, selectedIds, allowRevisionImageChanges),
-    }))
-    setRevisionDialogOpen(false)
-    toast.success('Revision applied')
+    let workingCards = applyRevisionPatches(set.cards, preview, selectedIds)
+    const imagePatches = preview.filter((patch) => patch.field === 'frontImageQuery' || patch.field === 'backImageQuery')
+
+    try {
+      setRevisionLoading(true)
+      let imagesApplied = 0
+      let imagesSkipped = 0
+      for (const patch of imagePatches) {
+        const card = workingCards.find((item) => item.id === patch.cardId)
+        if (!card) continue
+        const side = patch.field === 'frontImageQuery' ? 'front' : 'back'
+        const intent = buildImageSearchIntent({
+          side,
+          frontText: card.frontText,
+          backText: card.backText,
+          aiQuery: patch.value,
+        })
+        const result = await fetchImageForQuery(intent, new AbortController().signal)
+        if (!result.ok) {
+          imagesSkipped += 1
+          continue
+        }
+        imagesApplied += 1
+        workingCards = workingCards.map((item) => item.id !== patch.cardId
+          ? item
+          : {
+              ...item,
+              ...(side === 'front'
+                ? {
+                    frontImageUrl: result.imageUrl,
+                    frontImage: { ...imageAssetFromCandidate(result.candidate, result.imageUrl), candidates: result.candidates },
+                    frontImagePlacement: DEFAULT_IMAGE_PLACEMENT,
+                  }
+                : {
+                    backImageUrl: result.imageUrl,
+                    backImage: { ...imageAssetFromCandidate(result.candidate, result.imageUrl), candidates: result.candidates },
+                    backImagePlacement: DEFAULT_IMAGE_PLACEMENT,
+                  }),
+            })
+      }
+
+      updateSet((prev) => ({ ...prev, cards: workingCards }))
+      setRevisionPreview(null)
+      setRevisionDialogOpen(false)
+      if (imagesSkipped > 0) {
+        toast.message('Revision applied with image review needed', {
+          description: `${imagesApplied} image${imagesApplied === 1 ? '' : 's'} replaced; ${imagesSkipped} low-confidence or failed match${imagesSkipped === 1 ? '' : 'es'} left unchanged.`,
+        })
+      } else {
+        toast.success('Revision applied')
+      }
+    } finally {
+      setRevisionLoading(false)
+    }
   }
 
   async function handleImageUpload(cardId: string, file: File, side: 'front' | 'back' | 'both') {
@@ -1838,7 +1889,6 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   )
   const pages = paginateCardsFixedLength(set.cards, set.printSettings.cardsPerPage)
   const selectedRevisionCards = set.cards.filter((card) => selectedRevisionCardIds.includes(card.id))
-  const revisionOriginalById = new Map(set.cards.map((card) => [card.id, card]))
 
   return (
       <div className="space-y-8">
@@ -1971,7 +2021,11 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                     <Button variant="outline" size="sm" onClick={clearRevisionSelection} disabled={selectedRevisionCardIds.length === 0}>
                       Clear selection
                     </Button>
-                    <Button size="sm" onClick={openRevisionDialog} disabled={selectedRevisionCardIds.length === 0}>
+                    <Button variant="outline" size="sm" onClick={() => openRevisionDialog('all')}>
+                      <Sparkle className="mr-2" weight="bold" />
+                      Revise all with AI
+                    </Button>
+                    <Button size="sm" onClick={() => openRevisionDialog('selected')} disabled={selectedRevisionCardIds.length === 0}>
                       <Sparkle className="mr-2" weight="bold" />
                       Revise selected with AI
                     </Button>
@@ -2058,7 +2112,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                                 onClick={() => fileInputRefs.current[`${card.id}-front`]?.click()}
                               >
                                 <ImageIcon className="mr-2" weight="bold" />
-                                Change
+                                Upload change
                               </Button>
                               <Button
                                 variant="outline"
@@ -2066,7 +2120,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                                 onClick={() => openWebImageSearch(card.id, 'front')}
                               >
                                 <MagnifyingGlass className="mr-2" weight="bold" />
-                                Search Web Images
+                                Search again
                               </Button>
                             </div>
                           </div>
@@ -2137,7 +2191,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                                 onClick={() => fileInputRefs.current[`${card.id}-back`]?.click()}
                               >
                                 <ImageIcon className="mr-2" weight="bold" />
-                                Change
+                                Upload change
                               </Button>
                               <Button
                                 variant="outline"
@@ -2145,7 +2199,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                                 onClick={() => openWebImageSearch(card.id, 'back')}
                               >
                                 <MagnifyingGlass className="mr-2" weight="bold" />
-                                Search Web Images
+                                Search again
                               </Button>
                             </div>
                           </div>
@@ -2388,7 +2442,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       }}>
         <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Revise selected cards with AI</DialogTitle>
+            <DialogTitle>Revise current deck with AI</DialogTitle>
             <DialogDescription>
               Review the proposed changes before applying them to the selected cards.
             </DialogDescription>
@@ -2407,21 +2461,37 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 value={revisionFeedback}
                 onChange={(event) => setRevisionFeedback(event.target.value)}
                 rows={4}
-                placeholder="Make these easier. Fix unnatural English. Make answers shorter. Use British spelling."
+                placeholder="Replace irrelevant images and use wider framing. Make answers shorter. Revise only the selected cards."
                 disabled={revisionLoading}
               />
             </div>
 
-            <label className="flex items-start gap-3 text-sm">
-              <input
-                type="checkbox"
-                className="mt-1"
-                checked={allowRevisionImageChanges}
-                disabled={revisionLoading}
-                onChange={(event) => setAllowRevisionImageChanges(event.target.checked)}
-              />
-              <span>Allow image replacement suggestions. Pixel edits are not supported; use image search or crop/reframe controls after applying text changes.</span>
-            </label>
+            <div className="space-y-2">
+              <Label>Revision scope</Label>
+              <div className="inline-flex flex-wrap gap-1 rounded-md border p-1" role="group" aria-label="Revision scope">
+                {([
+                  ['text', 'Text only'],
+                  ['images', 'Images only'],
+                  ['both', 'Text and images'],
+                ] as const).map(([value, label]) => (
+                  <Button
+                    key={value}
+                    type="button"
+                    size="sm"
+                    variant={revisionScope === value ? 'default' : 'ghost'}
+                    aria-pressed={revisionScope === value}
+                    disabled={revisionLoading}
+                    onClick={() => {
+                      setRevisionScope(value)
+                      setRevisionPreview(null)
+                      setRevisionError(null)
+                    }}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </div>
+            </div>
 
             <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-2 sm:col-span-1">
@@ -2446,13 +2516,13 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
             {revisionPreview && (
               <div className="max-h-80 space-y-3 overflow-y-auto rounded-md border p-3">
-                {revisionPreview.map((card, index) => {
-                  const original = revisionOriginalById.get(card.id)
-                  const changes = original ? getChangedFields(original, card) : []
+                {selectedRevisionCards.map((original) => {
+                  const changes = getPatchChanges(original, revisionPreview)
+                  if (changes.length === 0) return null
                   return (
-                    <div key={card.id} className="rounded-md border p-3">
+                    <div key={original.id} className="rounded-md border p-3">
                       <div className="mb-2 flex items-center justify-between gap-3">
-                        <p className="font-semibold">Card {set.cards.findIndex((item) => item.id === card.id) + 1 || index + 1}</p>
+                        <p className="font-semibold">Card {set.cards.findIndex((item) => item.id === original.id) + 1}</p>
                         <p className="text-xs text-muted-foreground">{changes.length} change{changes.length === 1 ? '' : 's'}</p>
                       </div>
                       {changes.length === 0 ? (
@@ -2460,7 +2530,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                       ) : (
                         <div className="space-y-3">
                           {changes.map((change) => (
-                            <div key={`${card.id}-${change.field}`} className="grid gap-2 text-sm sm:grid-cols-2">
+                            <div key={`${original.id}-${change.field}`} className="grid gap-2 text-sm sm:grid-cols-2">
                               <div>
                                 <p className="text-xs font-semibold uppercase text-muted-foreground">
                                   {change.field === 'frontText' ? 'Front before'

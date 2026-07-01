@@ -141,8 +141,9 @@ export async function searchImages({ query, provider = 'auto', limit = 10, keys 
 
   const chain = provider === 'auto' ? getAutoProviderChain(keys) : [provider]
   const candidatePoolSize = Math.min(20, Math.max(12, limit * 3))
-
   const attempts = []
+  const reviewCandidates = []
+
   for (const current of chain) {
     try {
       const adapter = IMAGE_PROVIDER_ADAPTERS[current]
@@ -154,7 +155,12 @@ export async function searchImages({ query, provider = 'auto', limit = 10, keys 
       }
       const rawResults = await adapter.search({ query: trimmed, keys, limit: candidatePoolSize })
       const results = rankImageCandidates(rawResults, intent || { query: trimmed }, limit)
-      if (results.length > 0) return results
+      if (results.length > 0 && (results.some((candidate) => !candidate.needsReview) || provider !== 'auto')) return results
+      if (results.length > 0) {
+        reviewCandidates.push(...results)
+        attempts.push({ provider: current, code: 'low_confidence_results', query: trimmed })
+        continue
+      }
       attempts.push({ provider: current, code: 'provider_zero_results', query: trimmed })
       if (provider !== 'auto') {
         throw providerError(current, trimmed, 'provider_zero_results', `No image found from ${providerLabel(current)}`, {
@@ -166,6 +172,10 @@ export async function searchImages({ query, provider = 'auto', limit = 10, keys 
       attempts.push(imageSearchErrorBody(classified))
       if (provider !== 'auto') throw classified
     }
+  }
+
+  if (reviewCandidates.length > 0) {
+    return reviewCandidates.sort((left, right) => right.score - left.score).slice(0, limit)
   }
   throw providerError('auto', trimmed, 'all_providers_failed', 'All configured image providers failed', {
     details: attempts,

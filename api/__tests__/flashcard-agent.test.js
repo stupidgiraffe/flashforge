@@ -13,7 +13,7 @@ describe('module load', () => {
 // ---------------------------------------------------------------------------
 // Import helpers
 // ---------------------------------------------------------------------------
-import { extractJson, normalizeGeneratedCard, normalizeRevisedCard, normalizeCreateCount, extractProviderErrorDetail, classifyAiError } from '../flashcard-agent.js'
+import { extractJson, normalizeGeneratedCard, normalizeRevisedCard, normalizeCreateCount, normalizeRevisionPatches, extractProviderErrorDetail, classifyAiError } from '../flashcard-agent.js'
 
 // ---------------------------------------------------------------------------
 // extractJson
@@ -116,6 +116,21 @@ describe('normalizeRevisedCard', () => {
     const allowed = normalizeRevisedCard({ frontImageQuery: 'cute classroom cat' }, original, true)
     expect(blocked.frontImageQuery).toBeUndefined()
     expect(allowed.frontImageQuery).toBe('cute classroom cat')
+  })
+})
+
+describe('normalizeRevisionPatches', () => {
+  const cards = [{ id: 'card-1', frontText: 'Old front', backText: 'Old back' }]
+
+  it('rejects unknown ids, duplicate fields, and operations outside scope', () => {
+    const patches = normalizeRevisionPatches([
+      { cardId: 'card-1', field: 'frontText', value: 'New front' },
+      { cardId: 'card-1', field: 'frontText', value: 'Duplicate' },
+      { cardId: 'card-1', field: 'frontImageQuery', value: 'apple photo' },
+      { cardId: 'unknown', field: 'backText', value: 'Nope' },
+    ], cards, 'text')
+
+    expect(patches).toEqual([{ cardId: 'card-1', field: 'frontText', value: 'New front' }])
   })
 })
 
@@ -311,12 +326,11 @@ describe('handler', () => {
     const aiPayload = {
       choices: [{
         message: {
-          content: JSON.stringify({
-            cards: [
-              { id: 'card-1', frontText: 'Better front', backText: 'Better back' },
-              { id: 'unknown-card', frontText: 'Ignore me', backText: 'Ignore me' },
-            ],
-          }),
+          content: JSON.stringify({ patches: [
+            { cardId: 'card-1', field: 'frontText', value: 'Better front' },
+            { cardId: 'card-1', field: 'backText', value: 'Better back' },
+            { cardId: 'unknown-card', field: 'frontText', value: 'Ignore me' },
+          ] }),
         },
       }],
     }
@@ -334,6 +348,7 @@ describe('handler', () => {
         mode: 'revise',
         title: 'Test',
         instructions: 'Make it easier',
+        revisionScope: 'text',
         existingCards: [
           { id: 'card-1', frontText: 'Old front', backText: 'Old back' },
           { id: 'card-2', frontText: 'Keep front', backText: 'Keep back' },
@@ -344,9 +359,10 @@ describe('handler', () => {
 
     expect(res.statusCode).toBe(200)
     const data = JSON.parse(res.body)
-    expect(data.cards).toHaveLength(2)
-    expect(data.cards[0]).toMatchObject({ id: 'card-1', frontText: 'Better front', backText: 'Better back' })
-    expect(data.cards[1]).toMatchObject({ id: 'card-2', frontText: 'Keep front', backText: 'Keep back' })
+    expect(data.patches).toEqual([
+      { cardId: 'card-1', field: 'frontText', value: 'Better front' },
+      { cardId: 'card-1', field: 'backText', value: 'Better back' },
+    ])
 
     const requestBody = JSON.parse(global.fetch.mock.calls[0][1].body)
     expect(requestBody.temperature).toBe(0.25)

@@ -238,7 +238,7 @@ describe('searchImages auto fallback chain', () => {
   beforeEach(() => { vi.restoreAllMocks() })
 
   it('returns brave results first when brave key is present', async () => {
-    global.fetch = makeFetchWith({ results: [{ title: 'Brave', properties: { url: 'https://b.com/img.jpg' }, thumbnail: { src: 'https://b.com/t.jpg' }, url: 'https://b.com' }] })
+    global.fetch = makeFetchWith({ results: [{ title: 'Clear dog photo', properties: { url: 'https://b.com/img.jpg', width: 1200, height: 900 }, thumbnail: { src: 'https://b.com/t.jpg' }, url: 'https://b.com' }] })
     const results = await searchImages({
       query: 'dog',
       provider: 'auto',
