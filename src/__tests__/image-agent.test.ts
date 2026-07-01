@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getImageAgentOutcome, normalizeImageQuery } from '../lib/image-agent'
+import { buildImageSearchIntent, getImageAgentOutcome, normalizeImageQuery } from '../lib/image-agent'
 
 describe('normalizeImageQuery', () => {
   it('keeps concise literal image queries', () => {
@@ -17,7 +17,7 @@ describe('normalizeImageQuery', () => {
       frontText: 'giraffe',
       backText: 'long-necked animal',
       aiQuery: '',
-    })).toBe('giraffe cartoon')
+    })).toBe('giraffe clear simple illustration')
   })
 
   it('does not use sentence-like back text as a raw search query', () => {
@@ -26,7 +26,7 @@ describe('normalizeImageQuery', () => {
       frontText: 'giraffe',
       backText: "I'm a long-necked vegetarian who wears a tie.",
       aiQuery: "I'm a long-necked vegetarian who wears a tie.",
-    })).toBe('giraffe cartoon')
+    })).toBe('giraffe clear simple illustration')
   })
 
   it('rejects riddle-like first-person image queries', () => {
@@ -35,7 +35,18 @@ describe('normalizeImageQuery', () => {
       frontText: 'guitar',
       backText: 'I have strings but no puppets. I make music, not noise!',
       aiQuery: 'I have strings but no puppets',
-    })).toBe('guitar cartoon')
+    })).toBe('guitar clear simple illustration')
+  })
+
+  it('prefers a simple translated concept for language cards', () => {
+    expect(buildImageSearchIntent({
+      side: 'front',
+      frontText: 'el atardecer',
+      backText: 'sunset',
+    })).toMatchObject({
+      query: 'sunset clear simple illustration',
+      concepts: expect.arrayContaining(['sunset']),
+    })
   })
 })
 
