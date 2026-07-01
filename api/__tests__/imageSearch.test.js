@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { resolveKeys, getServerProviderConfig, searchImages, embedImage } from '../_imageSearch.js'
+import { ImageSearchError, resolveKeys, getServerProviderConfig, searchImages, embedImage, imageSearchErrorBody } from '../_imageSearch.js'
 
 // ---------------------------------------------------------------------------
 // resolveKeys
@@ -133,6 +133,24 @@ function makeFetchWith(body, { status = 200, contentType = 'application/json' } 
 describe('searchImages provider normalization', () => {
   beforeEach(() => { vi.restoreAllMocks() })
 
+  it('query "giraffe" through a mocked successful provider returns a usable result', async () => {
+    global.fetch = makeFetchWith({
+      results: [{
+        title: 'Giraffe',
+        url: 'https://example.com/giraffe.jpg',
+        thumbnail: 'https://example.com/giraffe-thumb.jpg',
+        foreign_landing_url: 'https://example.com/giraffe',
+      }],
+    })
+    const results = await searchImages({ query: 'giraffe', provider: 'openverse', keys: {} })
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({
+      provider: 'openverse',
+      title: 'Giraffe',
+      link: 'https://example.com/giraffe.jpg',
+    })
+  })
+
   it('normalizes Brave results', async () => {
     global.fetch = makeFetchWith({
       results: [{
@@ -254,12 +272,14 @@ describe('searchImages auto fallback chain', () => {
 
   it('specific provider does not fall through', async () => {
     global.fetch = makeFetchWith({ hits: [] })
-    const results = await searchImages({
+    await expect(searchImages({
       query: 'dog',
       provider: 'pixabay',
       keys: { pixabayApiKey: 'pix-key' },
+    })).rejects.toMatchObject({
+      code: 'provider_zero_results',
+      provider: 'pixabay',
     })
-    expect(results).toHaveLength(0)
     expect(global.fetch).toHaveBeenCalledOnce()
   })
 
@@ -280,25 +300,25 @@ describe('searchImages error handling', () => {
   it('throws classified error for 401 from brave', async () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 401, text: () => Promise.resolve('unauthorized') })
     await expect(searchImages({ query: 'cat', provider: 'brave', keys: { braveApiKey: 'bad' } }))
-      .rejects.toThrow('401')
+      .rejects.toMatchObject({ code: 'provider_auth_failed', provider: 'brave', status: 401 })
   })
 
   it('throws classified error for 429 from brave', async () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 429, text: () => Promise.resolve('rate limit') })
     await expect(searchImages({ query: 'cat', provider: 'brave', keys: { braveApiKey: 'key' } }))
-      .rejects.toThrow('429')
+      .rejects.toMatchObject({ code: 'provider_rate_limited', provider: 'brave', status: 429 })
   })
 
   it('throws classified error for 5xx from pixabay', async () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 503, text: () => Promise.resolve('service down') })
     await expect(searchImages({ query: 'cat', provider: 'pixabay', keys: { pixabayApiKey: 'key' } }))
-      .rejects.toThrow('503')
+      .rejects.toMatchObject({ code: 'provider_network_error', provider: 'pixabay', status: 503 })
   })
 
   it('throws aggregated error when all providers fail', async () => {
     global.fetch = vi.fn().mockRejectedValue(new Error('network failure'))
     await expect(searchImages({ query: 'cat', provider: 'auto', keys: { braveApiKey: 'key' } }))
-      .rejects.toThrow('brave')
+      .rejects.toMatchObject({ code: 'all_providers_failed', provider: 'auto' })
   })
 
   it('handles AbortError (timeout) gracefully', async () => {
@@ -309,12 +329,30 @@ describe('searchImages error handling', () => {
       .rejects.toThrow()
   })
 
-  it('skips provider when key is missing (returns empty, no fetch)', async () => {
+  it('throws provider_not_configured when a selected provider has no key', async () => {
     global.fetch = vi.fn()
-    // brave with no key → returns [] (no fetch)
-    const results = await searchImages({ query: 'cat', provider: 'brave', keys: { braveApiKey: '' } })
-    expect(results).toHaveLength(0)
+    await expect(searchImages({ query: 'cat', provider: 'brave', keys: { braveApiKey: '' } }))
+      .rejects.toMatchObject({ code: 'provider_not_configured', provider: 'brave' })
     expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('serializes structured image errors without key values', () => {
+    const error = new ImageSearchError('Brave auth failed', {
+      code: 'provider_auth_failed',
+      provider: 'brave',
+      query: 'giraffe',
+      hint: 'Check the Brave API key.',
+      details: 'safe detail',
+    })
+    expect(imageSearchErrorBody(error)).toEqual({
+      error: 'Brave auth failed',
+      code: 'provider_auth_failed',
+      provider: 'brave',
+      query: 'giraffe',
+      status: undefined,
+      hint: 'Check the Brave API key.',
+      details: 'safe detail',
+    })
   })
 })
 

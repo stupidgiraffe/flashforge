@@ -1,4 +1,4 @@
-import { embedImage, searchImages, resolveKeys } from './_imageSearch.js'
+import { embedImage, imageSearchErrorBody, searchImages, resolveKeys } from './_imageSearch.js'
 
 const MAX_CARDS = 50
 
@@ -39,27 +39,29 @@ export default async function handler(req, res) {
       const cardId = String(card.id || '')
       const query = String(card.query || '').trim()
       if (!cardId || !query) {
-        results.push({ cardId, query, error: 'Missing card id or query' })
+        results.push({ cardId, query, error: 'Missing card id or query', code: 'provider_bad_request' })
         continue
       }
       try {
         const [found] = await searchImages({ query, provider, limit: 1, keys })
-        if (!found) {
-          results.push({ cardId, query, error: 'No image found' })
-          continue
-        }
         const result = { cardId, query, title: found.title, imageUrl: found.link, thumbnailLink: found.thumbnailLink, sourcePage: found.sourcePage, provider: found.provider, embedded: false }
         if (embedImages) {
           try {
             result.dataUrl = await embedImage(found.link)
             result.embedded = true
           } catch (error) {
-            result.error = `Found image link, but could not embed: ${error instanceof Error ? error.message : 'download failed'}`
+            result.warning = {
+              error: error instanceof Error ? error.message : 'Image download failed',
+              code: 'image_embed_failed',
+              provider: found.provider,
+              query,
+              hint: 'Found an image result, but downloading it for embedding failed. The remote URL is being used instead.',
+            }
           }
         }
         results.push(result)
       } catch (error) {
-        results.push({ cardId, query, error: error instanceof Error ? error.message : 'Search failed' })
+        results.push({ cardId, query, ...imageSearchErrorBody(error, 'Search failed') })
       }
     }
     return json(res, 200, { results })

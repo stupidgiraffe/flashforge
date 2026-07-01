@@ -1,4 +1,4 @@
-import { searchImages, embedImage, resolveKeys } from './_imageSearch.js'
+import { ImageSearchError, imageSearchErrorBody, searchImages, embedImage, resolveKeys } from './_imageSearch.js'
 
 function json(res, status, body) {
   res.statusCode = status
@@ -41,13 +41,32 @@ export default async function handler(req, res) {
       try {
         const dataUrl = await embedImage(results[0].link)
         return json(res, 200, { results, dataUrl, embedded: true })
-      } catch {
-        // Embed failed; return link-only result
+      } catch (error) {
+        // Embed failed; keep the usable remote URL and report the fallback.
+        return json(res, 200, {
+          results,
+          embedded: false,
+          warning: {
+            error: error instanceof Error ? error.message : 'Image download failed',
+            code: 'image_embed_failed',
+            provider: results[0].provider,
+            query,
+            hint: 'Found an image result, but downloading it for embedding failed. The remote URL is being used instead.',
+          },
+        })
       }
     }
 
     return json(res, 200, { results })
   } catch (error) {
-    return json(res, 500, { error: error instanceof Error ? error.message : 'Image search failed' })
+    const body = imageSearchErrorBody(error, 'Image search failed')
+    const status = error instanceof ImageSearchError && error.code === 'provider_not_configured' ? 400
+      : error instanceof ImageSearchError && error.code === 'provider_auth_failed' ? 401
+        : error instanceof ImageSearchError && error.code === 'provider_rate_limited' ? 429
+          : error instanceof ImageSearchError && error.code === 'provider_zero_results' ? 404
+            : error instanceof ImageSearchError && error.code === 'provider_bad_request' ? 400
+              : error instanceof ImageSearchError && error.code === 'provider_timeout' ? 504
+                : 502
+    return json(res, status, body)
   }
 }
