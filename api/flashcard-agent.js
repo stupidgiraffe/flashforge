@@ -3,6 +3,9 @@ const MAX_EXISTING_FRONTS = 60
 const AI_TIMEOUT_MS = 50_000
 const AI_MAX_RETRIES = 2
 const VALID_MODES = new Set(['create', 'enhance', 'revise'])
+const VALID_REVISION_SCOPES = new Set(['text', 'images', 'both'])
+const TEXT_REVISION_FIELDS = new Set(['frontText', 'backText'])
+const IMAGE_REVISION_FIELDS = new Set(['frontImageQuery', 'backImageQuery'])
 
 function json(res, status, body) {
   res.statusCode = status
@@ -45,6 +48,46 @@ function normalizeMode(mode) {
     throw agentError('Unsupported AI agent mode', 'INVALID_MODE', 400, 'Use create, enhance, or revise.')
   }
   return value
+}
+
+export function normalizeRevisionScope(value) {
+  return VALID_REVISION_SCOPES.has(value) ? value : 'both'
+}
+
+function revisionFieldAllowed(field, scope) {
+  if (scope === 'both') return TEXT_REVISION_FIELDS.has(field) || IMAGE_REVISION_FIELDS.has(field)
+  return scope === 'text' ? TEXT_REVISION_FIELDS.has(field) : IMAGE_REVISION_FIELDS.has(field)
+}
+
+export function normalizeRevisionPatches(rawPatches, originalCards, revisionScope = 'both') {
+  const scope = normalizeRevisionScope(revisionScope)
+  const originalsById = new Map(originalCards.map((card) => [card.id, card]))
+  const seen = new Set()
+  const patches = []
+
+  for (const raw of Array.isArray(rawPatches) ? rawPatches : []) {
+    const cardId = String(raw?.cardId || raw?.id || '').trim()
+    const field = String(raw?.field || '').trim()
+    const value = typeof raw?.value === 'string' ? raw.value.trim() : ''
+    const original = originalsById.get(cardId)
+    const key = `${cardId}:${field}`
+    if (!original || !revisionFieldAllowed(field, scope) || !value || seen.has(key)) continue
+    if (TEXT_REVISION_FIELDS.has(field) && value === String(original[field] || '').trim()) continue
+    seen.add(key)
+    patches.push({ cardId, field, value })
+  }
+  return patches
+}
+
+function cardResponsesToPatches(rawCards, originalCards, revisionScope) {
+  const rawPatches = []
+  for (const raw of Array.isArray(rawCards) ? rawCards : []) {
+    const cardId = String(raw?.id || '').trim()
+    for (const field of [...TEXT_REVISION_FIELDS, ...IMAGE_REVISION_FIELDS]) {
+      if (hasOwn(raw, field)) rawPatches.push({ cardId, field, value: raw[field] })
+    }
+  }
+  return normalizeRevisionPatches(rawPatches, originalCards, revisionScope)
 }
 
 export function normalizeCreateCount(count) {
@@ -180,15 +223,15 @@ function compactExistingCard(card) {
   }
 }
 
-function buildMessages({ mode, title, instructions, createCount, fronts, existingCards, allowImageRevision }) {
+function buildMessages({ mode, title, instructions, createCount, fronts, existingCards, revisionScope }) {
   if (mode === 'revise') {
     return {
       temperature: 0.25,
-      system: 'You are revising existing teacher flashcards. Return JSON only, no markdown fences. Only change what the user explicitly requested. Preserve card ids exactly. Preserve unmentioned fields exactly. Do not add cards. Do not remove cards. Schema: {"cards":[{"id":"existing card id","frontText":"revised or unchanged front text","backText":"revised or unchanged back text","frontImageQuery":"optional replacement image search query","backImageQuery":"optional replacement image search query"}]}. The app cannot edit image pixels. Supported image changes are replacement search queries or later manual crop/reframe controls.',
+      system: 'You revise existing teacher flashcards using explicit patch operations. Return JSON only, no markdown fences. Return only fields that must change. Preserve card ids exactly. Never add or remove cards. Never patch an unrequested field. Schema: {"patches":[{"cardId":"existing card id","field":"frontText|backText|frontImageQuery|backImageQuery","value":"replacement value"}]}. Image changes must be concrete visual search queries, not image URLs. For language cards, use the simple translated visual concept. Prefer centered, vocabulary-friendly subjects and avoid logos, text-heavy images, panoramas, and extreme close-ups.',
       user: [
         `Set title: ${title}`,
         `Revision instructions: ${instructions}`,
-        `Image query changes allowed: ${allowImageRevision ? 'yes' : 'no'}`,
+        `Allowed revision scope: ${revisionScope}`,
         'Selected cards to revise:',
         JSON.stringify(existingCards, null, 2),
       ].join('\n'),
@@ -215,7 +258,7 @@ function buildMessages({ mode, title, instructions, createCount, fronts, existin
   }
 }
 
-async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instructions, count, existingFronts, existingCards, allowImageRevision }) {
+async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instructions, count, existingFronts, existingCards, revisionScope }) {
   const base = normalizeBaseUrl(aiBaseUrl)
   const model = String(aiModel || '').trim()
   validateCredentials(aiApiKey, model)
@@ -238,7 +281,7 @@ async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instru
     createCount,
     fronts,
     existingCards: cardsForRevision,
-    allowImageRevision,
+    revisionScope,
   })
 
   let lastError
@@ -316,11 +359,23 @@ async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instru
       }
 
       const rawCards = Array.isArray(parsed) ? parsed : Array.isArray(parsed.cards) ? parsed.cards : []
+      const rawPatches = Array.isArray(parsed?.patches) ? parsed.patches : []
+
+      if (mode === 'revise') {
+        const patches = rawPatches.length > 0
+          ? normalizeRevisionPatches(rawPatches, cardsForRevision, revisionScope)
+          : cardResponsesToPatches(rawCards, cardsForRevision, revisionScope)
+        if (patches.length === 0) {
+          throw agentError('AI returned no valid revision patches', 'AI_NO_VALID_PATCHES', 502, 'Try clearer instructions or broaden the revision scope.')
+        }
+        return { patches }
+      }
+
       if (rawCards.length === 0) {
         throw agentError('AI returned no cards', 'AI_NO_CARDS', 502, 'Try clearer instructions or a different model.')
       }
 
-      if (mode === 'revise' || mode === 'enhance') {
+      if (mode === 'enhance') {
         const originalsById = new Map(cardsForRevision.map((card) => [card.id, card]))
         const rawById = new Map()
         for (const raw of rawCards) {
@@ -328,7 +383,7 @@ async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instru
           if (originalsById.has(id) && !rawById.has(id)) rawById.set(id, raw)
         }
         if (rawById.size === 0) throw agentError('AI returned no matching revised cards', 'AI_NO_MATCHING_REVISED_CARDS', 502, 'Try rerunning revision with clearer instructions.')
-        return cardsForRevision.map((original) => normalizeRevisedCard(rawById.get(original.id) || {}, original, allowImageRevision))
+        return cardsForRevision.map((original) => normalizeRevisedCard(rawById.get(original.id) || {}, original, true))
       }
 
       const normalizedCards = rawCards
@@ -379,7 +434,7 @@ export default async function handler(req, res) {
 
     const mode = normalizeMode(body.mode)
 
-    const cards = await completeCards({
+    const result = await completeCards({
       aiApiKey: String(body.aiApiKey || '').trim(),
       aiBaseUrl: String(body.aiBaseUrl || '').trim(),
       aiModel: String(body.aiModel || '').trim(),
@@ -389,10 +444,10 @@ export default async function handler(req, res) {
       count: Number(body.count || 10),
       existingFronts,
       existingCards: Array.isArray(body.existingCards) ? body.existingCards : [],
-      allowImageRevision: body.allowImageRevision === true,
+      revisionScope: normalizeRevisionScope(body.revisionScope),
     })
 
-    return json(res, 200, { cards })
+    return json(res, 200, mode === 'revise' ? result : { cards: result })
   } catch (error) {
     if (error?.code) return jsonError(res, error)
     const msg = error instanceof Error ? error.message : 'Flashcard Agent failed'

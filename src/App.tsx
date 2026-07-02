@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
-import type { CSSProperties, PointerEventHandler, WheelEventHandler } from 'react'
+import type { CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Printer, DownloadSimple, UploadSimple, Exam, Image as ImageIcon, Trash, ArrowLeft, DotsThreeVertical, Copy, Sparkle, Stack, CloudArrowUp, CloudArrowDown, LinkSimple, MagnifyingGlass, X, Gear, CheckCircle } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
@@ -14,16 +14,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { toast, Toaster } from 'sonner'
-import type { FlashCardSet, FlashCard } from '@/lib/types'
+import type { FlashCardSet, FlashCard, ImageCandidate, ImagePlacement } from '@/lib/types'
 import { DEFAULT_PRINT_SETTINGS, DEFAULT_TEST_SETTINGS } from '@/lib/types'
 import { loadSets, saveSet, deleteSet, generateUniqueId, compressImage, exportSetToJSON, importSetFromJSON, exportAllSetsToJSON, importAllSetsFromJSON, duplicateSet, getStorageStats } from '@/lib/storage'
 import { FlashCardDisplay } from '@/components/FlashCardDisplay'
+import { ImagePlacementEditor } from '@/components/ImagePlacementEditor'
 import { generateTestQuestions } from '@/lib/test-utils'
 import { calculatePrintLayout, paginateCardsFixedLength, calculateBackPagePositions } from '@/lib/print-utils'
-import { getChangedFields, mergeRevisedCards, validateRevisionResult } from '@/lib/flashcard-revision'
-import type { FlashcardRevisionCard } from '@/lib/flashcard-revision'
+import { applyRevisionPatches, getPatchChanges, validateRevisionPatches } from '@/lib/flashcard-revision'
+import type { RevisionPatchOperation, RevisionScope } from '@/lib/flashcard-revision'
 import { explainAiAgentError, formatAiAgentError } from '@/lib/ai-agent-errors'
-import { getImageAgentOutcome, normalizeImageQuery } from '@/lib/image-agent'
+import { buildImageSearchIntent, getImageAgentOutcome, getImageReviewCandidateUpdates, getStoredImageCandidates } from '@/lib/image-agent'
+import { DEFAULT_IMAGE_PLACEMENT, getCardSideImage, imageAssetFromCandidate } from '@/lib/image-placement'
 
 declare global {
   interface Window {
@@ -47,9 +49,6 @@ const DesignPanel = lazy(() => import('@/components/DesignPanel').then((module) 
 const TestConfigDialog = lazy(() => import('@/components/TestConfigDialog').then((module) => ({ default: module.TestConfigDialog })))
 const TestDisplay = lazy(() => import('@/components/TestDisplay').then((module) => ({ default: module.TestDisplay })))
 const AnswerKey = lazy(() => import('@/components/TestDisplay').then((module) => ({ default: module.AnswerKey })))
-const MAX_IMAGE_OFFSET = 180
-const MIN_IMAGE_SCALE = 0.6
-const MAX_IMAGE_SCALE = 2
 const TOKEN_REFRESH_BUFFER_MS = 60_000
 
 interface GoogleConfig {
@@ -87,14 +86,6 @@ function promptForBackupFilename(message: string, defaultName: string): string |
     return null
   }
   return userInput
-}
-
-function clampImageOffset(base: number, delta: number): number {
-  return Math.max(-MAX_IMAGE_OFFSET, Math.min(MAX_IMAGE_OFFSET, base + delta))
-}
-
-function clampImageScale(scale: number): number {
-  return Math.max(MIN_IMAGE_SCALE, Math.min(MAX_IMAGE_SCALE, scale))
 }
 
 function loadGoogleIdentityScript(): Promise<void> {
@@ -782,13 +773,6 @@ interface SetEditorProps {
   onOpenGoogleSettings: () => void
 }
 
-interface ImageSearchResult {
-  title: string
-  link: string
-  thumbnailLink?: string
-  provider?: string
-}
-
 interface ImageSearchWarning {
   error?: string
   code?: string
@@ -854,176 +838,7 @@ function createAiAgentRequestError(response: Response, data: AiAgentErrorBody, f
   return error
 }
 
-interface ImageCropEditorProps {
-  imageUrl: string
-  alt: string
-  scale: number
-  offsetX: number
-  offsetY: number
-  onChange: (updates: { offsetX?: number; offsetY?: number; scale?: number }) => void
-}
 
-function ImageCropEditor({ imageUrl, alt, scale, offsetX, offsetY, onChange }: ImageCropEditorProps) {
-  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; baseX: number; baseY: number } | null>(null)
-  const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map())
-  const pinchRef = useRef<{
-    startDistance: number
-    startScale: number
-    startOffsetX: number
-    startOffsetY: number
-    midpointX: number
-    midpointY: number
-    centerX: number
-    centerY: number
-  } | null>(null)
-
-  const getPointerPair = () => {
-    const [first, second] = Array.from(activePointersRef.current.values())
-    if (!first || !second) return null
-    return { first, second }
-  }
-
-  const initializePinch = (target: HTMLDivElement) => {
-    const pair = getPointerPair()
-    if (!pair) return
-    const rect = target.getBoundingClientRect()
-    const dx = pair.second.x - pair.first.x
-    const dy = pair.second.y - pair.first.y
-    const distance = Math.hypot(dx, dy)
-    if (distance <= 0) return
-
-    pinchRef.current = {
-      startDistance: distance,
-      startScale: scale,
-      startOffsetX: offsetX,
-      startOffsetY: offsetY,
-      midpointX: (pair.first.x + pair.second.x) / 2 - rect.left,
-      midpointY: (pair.first.y + pair.second.y) / 2 - rect.top,
-      centerX: rect.width / 2,
-      centerY: rect.height / 2,
-    }
-  }
-
-  const handlePointerDown: PointerEventHandler<HTMLDivElement> = (event) => {
-    activePointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
-    dragRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      baseX: offsetX,
-      baseY: offsetY,
-    }
-    event.currentTarget.setPointerCapture(event.pointerId)
-    if (activePointersRef.current.size >= 2) {
-      dragRef.current = null
-      initializePinch(event.currentTarget)
-    }
-  }
-
-  const handlePointerMove: PointerEventHandler<HTMLDivElement> = (event) => {
-    if (activePointersRef.current.has(event.pointerId)) {
-      activePointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
-    }
-
-    if (activePointersRef.current.size >= 2) {
-      if (!pinchRef.current) {
-        initializePinch(event.currentTarget)
-      }
-      const pinchState = pinchRef.current
-      const pair = getPointerPair()
-      if (pinchState && pair) {
-        const dx = pair.second.x - pair.first.x
-        const dy = pair.second.y - pair.first.y
-        const distance = Math.hypot(dx, dy)
-        if (distance > 0) {
-          const nextScale = clampImageScale(pinchState.startScale * (distance / pinchState.startDistance))
-          const ratio = nextScale / pinchState.startScale
-          const relativeX = pinchState.midpointX - pinchState.centerX - pinchState.startOffsetX
-          const relativeY = pinchState.midpointY - pinchState.centerY - pinchState.startOffsetY
-          const nextOffsetX = clampImageOffset(pinchState.startOffsetX, (1 - ratio) * relativeX)
-          const nextOffsetY = clampImageOffset(pinchState.startOffsetY, (1 - ratio) * relativeY)
-          onChange({ scale: nextScale, offsetX: nextOffsetX, offsetY: nextOffsetY })
-        }
-      }
-      return
-    }
-
-    const dragState = dragRef.current
-    if (!dragState || dragState.pointerId !== event.pointerId) return
-    const nextX = clampImageOffset(dragState.baseX, event.clientX - dragState.startX)
-    const nextY = clampImageOffset(dragState.baseY, event.clientY - dragState.startY)
-    onChange({ offsetX: nextX, offsetY: nextY })
-  }
-
-  const handlePointerUp: PointerEventHandler<HTMLDivElement> = (event) => {
-    activePointersRef.current.delete(event.pointerId)
-    if (activePointersRef.current.size < 2) {
-      pinchRef.current = null
-    }
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-    if (dragRef.current?.pointerId === event.pointerId) {
-      dragRef.current = null
-    }
-  }
-
-  const handleWheel: WheelEventHandler<HTMLDivElement> = (event) => {
-    if (!event.ctrlKey && !event.metaKey) return
-    event.preventDefault()
-
-    const rect = event.currentTarget.getBoundingClientRect()
-    const centerX = rect.width / 2
-    const centerY = rect.height / 2
-    const midpointX = event.clientX - rect.left
-    const midpointY = event.clientY - rect.top
-    const nextScale = clampImageScale(scale * Math.exp(-event.deltaY * 0.002))
-    const ratio = nextScale / scale
-    const relativeX = midpointX - centerX - offsetX
-    const relativeY = midpointY - centerY - offsetY
-    const nextOffsetX = clampImageOffset(offsetX, (1 - ratio) * relativeX)
-    const nextOffsetY = clampImageOffset(offsetY, (1 - ratio) * relativeY)
-    onChange({ scale: nextScale, offsetX: nextOffsetX, offsetY: nextOffsetY })
-  }
-
-  return (
-    <div className="space-y-3">
-      <div
-        className="relative rounded-lg overflow-hidden border-2 border-border bg-muted/20 h-48 touch-none cursor-grab active:cursor-grabbing"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        onWheel={handleWheel}
-      >
-        <img
-          src={imageUrl}
-          alt={alt}
-          className="w-full h-full object-cover select-none"
-          draggable={false}
-          style={{
-            transform: `translate(${offsetX}px, ${offsetY}px) scale(${scale})`,
-            transformOrigin: 'center center',
-          }}
-        />
-      </div>
-      <div className="space-y-2">
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>Crop / zoom</span>
-          <span>{Math.round(scale * 100)}%</span>
-        </div>
-        <Slider
-          value={[scale]}
-          onValueChange={([value]) => onChange({ scale: value })}
-          min={MIN_IMAGE_SCALE}
-          max={MAX_IMAGE_SCALE}
-          step={0.05}
-        />
-        <p className="text-xs text-muted-foreground">Drag image to reposition. Pinch (touch/trackpad) or Ctrl/Cmd + wheel to zoom and crop tighter.</p>
-      </div>
-    </div>
-  )
-}
 
 function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, googleImageSearchCx, onOpenGoogleSettings }: SetEditorProps) {
   const [showTestDialog, setShowTestDialog] = useState(false)
@@ -1032,7 +847,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [imageSearchCardId, setImageSearchCardId] = useState<string | null>(null)
   const [imageSearchSide, setImageSearchSide] = useState<'front' | 'back'>('front')
   const [imageSearchQuery, setImageSearchQuery] = useState('')
-  const [imageSearchResults, setImageSearchResults] = useState<ImageSearchResult[]>([])
+  const [imageSearchResults, setImageSearchResults] = useState<ImageCandidate[]>([])
   const [imageSearchLoading, setImageSearchLoading] = useState(false)
   const [imageAgentOpen, setImageAgentOpen] = useState(false)
   const [flashcardAgentMode, setFlashcardAgentMode] = useState<FlashcardAgentMode>('enhance')
@@ -1045,10 +860,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [selectedRevisionCardIds, setSelectedRevisionCardIds] = useState<string[]>([])
   const [revisionDialogOpen, setRevisionDialogOpen] = useState(false)
   const [revisionFeedback, setRevisionFeedback] = useState('')
-  const [revisionPreview, setRevisionPreview] = useState<FlashcardRevisionCard[] | null>(null)
+  const [revisionPreview, setRevisionPreview] = useState<RevisionPatchOperation[] | null>(null)
   const [revisionLoading, setRevisionLoading] = useState(false)
   const [revisionError, setRevisionError] = useState<string | null>(null)
-  const [allowRevisionImageChanges, setAllowRevisionImageChanges] = useState(false)
+  const [revisionScope, setRevisionScope] = useState<RevisionScope>('both')
   const [aiConnectionTestLoading, setAiConnectionTestLoading] = useState(false)
   const [imageAgentSide, setImageAgentSide] = useState<ImageAgentTargetSide>('both')
   const [imageAgentQueryTemplate, setImageAgentQueryTemplate] = useState('{front} funny character clear image')
@@ -1184,11 +999,13 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     setRevisionError(null)
   }
 
-  function openRevisionDialog() {
-    if (selectedRevisionCardIds.length === 0) {
+  function openRevisionDialog(target: 'selected' | 'all' = 'selected') {
+    const targetIds = target === 'all' ? set.cards.map((card) => card.id) : selectedRevisionCardIds
+    if (targetIds.length === 0) {
       toast.error('Select one or more cards to revise')
       return
     }
+    setSelectedRevisionCardIds(targetIds)
     setFlashcardAgentMode('revise')
     setRevisionDialogOpen(true)
     setRevisionError(null)
@@ -1270,31 +1087,33 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           mode: 'revise',
           title: set.title,
           instructions: revisionFeedback,
+          revisionScope,
           existingCards: selectedCards.map((card) => ({
             id: card.id,
             frontText: card.frontText,
             backText: card.backText,
-            frontImageUrl: card.frontImageUrl,
-            backImageUrl: card.backImageUrl,
+            frontImageUrl: card.frontImage?.originalUrl || card.frontImageUrl,
+            backImageUrl: card.backImage?.originalUrl || card.backImageUrl,
           })),
-          allowImageRevision: allowRevisionImageChanges,
           aiApiKey: flashcardAgentAiKey.trim(),
           aiBaseUrl: flashcardAgentBaseUrl.trim(),
           aiModel: flashcardAgentModel.trim(),
         }),
       })
       clearTimeout(timer)
-      const data = await response.json().catch(() => ({ error: 'Flashcard revision failed' })) as { cards?: FlashcardRevisionCard[] } & AiAgentErrorBody
+      const data = await response.json().catch(() => ({ error: 'Flashcard revision failed' })) as {
+        patches?: RevisionPatchOperation[]
+      } & AiAgentErrorBody
       if (!response.ok) {
         throw createAiAgentRequestError(response, data, 'Flashcard revision failed')
       }
 
       const selectedIds = new Set(selectedCards.map((card) => card.id))
-      const { validCards, unknownIds } = validateRevisionResult(data.cards ?? [], selectedIds)
-      if (validCards.length === 0) throw new Error('AI returned no revisions for the selected cards')
-      setRevisionPreview(validCards)
-      if (unknownIds.length > 0) {
-        setRevisionError(`Ignored ${unknownIds.length} card${unknownIds.length === 1 ? '' : 's'} with unknown ids.`)
+      const { validPatches, rejected } = validateRevisionPatches(data.patches ?? [], selectedIds, revisionScope)
+      if (validPatches.length === 0) throw new Error('AI returned no valid changes for the selected cards and scope')
+      setRevisionPreview(validPatches)
+      if (rejected.length > 0) {
+        setRevisionError(`Ignored ${rejected.length} invalid or out-of-scope operation${rejected.length === 1 ? '' : 's'}.`)
       }
       toast.success('Revision preview ready')
     } catch (error) {
@@ -1311,17 +1130,78 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     }
   }
 
-  function applyRevisionPreview() {
+  async function applyRevisionPreview() {
     if (!revisionPreview || revisionLoading) return
     const preview = revisionPreview
-    setRevisionPreview(null)
     const selectedIds = new Set(selectedRevisionCardIds)
-    updateSet(prev => ({
-      ...prev,
-      cards: mergeRevisedCards(prev.cards, preview, selectedIds, allowRevisionImageChanges),
-    }))
-    setRevisionDialogOpen(false)
-    toast.success('Revision applied')
+    let workingCards = applyRevisionPatches(set.cards, preview, selectedIds)
+    const imagePatches = preview.filter((patch) => patch.field === 'frontImageQuery' || patch.field === 'backImageQuery')
+
+    try {
+      setRevisionLoading(true)
+      let imagesApplied = 0
+      let imagesNeedReview = 0
+      let imagesFailed = 0
+      for (const patch of imagePatches) {
+        const card = workingCards.find((item) => item.id === patch.cardId)
+        if (!card) continue
+        const side = patch.field === 'frontImageQuery' ? 'front' : 'back'
+        const intent = buildImageSearchIntent({
+          side,
+          frontText: card.frontText,
+          backText: card.backText,
+          aiQuery: patch.value,
+        })
+        const result = await fetchImageForQuery(intent, new AbortController().signal)
+        if (!result.ok) {
+          if (result.code === 'low_confidence_image' && result.candidates?.length) {
+            imagesNeedReview += 1
+            workingCards = workingCards.map((item) => item.id === patch.cardId
+              ? { ...item, ...getImageReviewCandidateUpdates(side, result.candidates!) }
+              : item)
+          } else {
+            imagesFailed += 1
+          }
+          continue
+        }
+        imagesApplied += 1
+        workingCards = workingCards.map((item) => item.id !== patch.cardId
+          ? item
+          : {
+              ...item,
+              ...(side === 'front'
+                ? {
+                    frontImageUrl: result.imageUrl,
+                    frontImage: { ...imageAssetFromCandidate(result.candidate, result.imageUrl), candidates: result.candidates },
+                    frontImageCandidates: undefined,
+                    frontImagePlacement: DEFAULT_IMAGE_PLACEMENT,
+                  }
+                : {
+                    backImageUrl: result.imageUrl,
+                    backImage: { ...imageAssetFromCandidate(result.candidate, result.imageUrl), candidates: result.candidates },
+                    backImageCandidates: undefined,
+                    backImagePlacement: DEFAULT_IMAGE_PLACEMENT,
+                  }),
+            })
+      }
+
+      updateSet((prev) => ({ ...prev, cards: workingCards }))
+      setRevisionPreview(null)
+      setRevisionDialogOpen(false)
+      if (imagesNeedReview > 0) {
+        toast.message('Revision applied; image options need review', {
+          description: `${imagesApplied} replaced · ${imagesNeedReview} saved for manual review · ${imagesFailed} failed`,
+        })
+      } else if (imagesFailed > 0) {
+        toast.message('Revision applied with image search failures', {
+          description: `${imagesApplied} replaced · ${imagesFailed} failed and remained unchanged`,
+        })
+      } else {
+        toast.success('Revision applied')
+      }
+    } finally {
+      setRevisionLoading(false)
+    }
   }
 
   async function handleImageUpload(cardId: string, file: File, side: 'front' | 'back' | 'both') {
@@ -1341,9 +1221,19 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         const dataUrl = e.target?.result as string
         const compressed = await compressImage(dataUrl)
         if (side === 'front') {
-          updateCard(cardId, { frontImageUrl: compressed, frontImageScale: 1, frontImageOffsetX: 0, frontImageOffsetY: 0 })
+          updateCard(cardId, {
+            frontImageUrl: compressed,
+            frontImage: { url: compressed, originalUrl: compressed, title: file.name, provider: 'upload' },
+            frontImageCandidates: undefined,
+            frontImagePlacement: DEFAULT_IMAGE_PLACEMENT,
+          })
         } else if (side === 'back') {
-          updateCard(cardId, { backImageUrl: compressed, backImageScale: 1, backImageOffsetX: 0, backImageOffsetY: 0 })
+          updateCard(cardId, {
+            backImageUrl: compressed,
+            backImage: { url: compressed, originalUrl: compressed, title: file.name, provider: 'upload' },
+            backImageCandidates: undefined,
+            backImagePlacement: DEFAULT_IMAGE_PLACEMENT,
+          })
         } else {
           updateCard(cardId, { imageUrl: compressed, imagePosition: 'both', imageScale: 1 })
         }
@@ -1358,9 +1248,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
   function removeImage(cardId: string, side: 'front' | 'back' | 'both') {
     if (side === 'front') {
-      updateCard(cardId, { frontImageUrl: undefined, frontImageScale: 1, frontImageOffsetX: 0, frontImageOffsetY: 0 })
+      updateCard(cardId, { frontImageUrl: undefined, frontImage: undefined, frontImagePlacement: undefined })
     } else if (side === 'back') {
-      updateCard(cardId, { backImageUrl: undefined, backImageScale: 1, backImageOffsetX: 0, backImageOffsetY: 0 })
+      updateCard(cardId, { backImageUrl: undefined, backImage: undefined, backImagePlacement: undefined })
     } else {
       updateCard(cardId, { imageUrl: undefined, imagePosition: 'front', imageScale: 1 })
     }
@@ -1368,6 +1258,16 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   }
 
   function openWebImageSearch(cardId: string, side: 'front' | 'back') {
+    const card = set.cards.find((item) => item.id === cardId)
+    if (card) {
+      const intent = buildImageSearchIntent({
+        side,
+        frontText: card.frontText,
+        backText: card.backText,
+      })
+      setImageSearchQuery(intent.query)
+      setImageSearchResults(getStoredImageCandidates(card, side))
+    }
     setImageSearchCardId(cardId)
     setImageSearchSide(side)
     setImageSearchOpen(true)
@@ -1390,6 +1290,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           signal: controller.signal,
           body: JSON.stringify({
             query: imageSearchQuery.trim(),
+            intent: { query: imageSearchQuery.trim(), concepts: [imageSearchQuery.trim()], style: 'neutral' },
             braveApiKey: imageBraveKey.trim(),
             pixabayApiKey: imagePixabayKey.trim(),
             pexelsApiKey: imagePexelsKey.trim(),
@@ -1405,7 +1306,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           toast.message(err.error || "Couldn't find images — try a different keyword or configure a provider in Image Search Settings")
           return
         }
-        const data = await response.json() as { results?: ImageSearchResult[] }
+        const data = await response.json() as { results?: ImageCandidate[] }
         const results = data.results ?? []
         setImageSearchResults(results)
         if (results.length === 0) toast.message('No images found — try a different keyword or configure a provider in Image Search Settings')
@@ -1422,12 +1323,26 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     }
   }
 
-  function handleSelectWebImage(url: string) {
+  function handleSelectWebImage(candidate: ImageCandidate) {
     if (!imageSearchCardId) return
+    const asset = {
+      ...imageAssetFromCandidate(candidate),
+      candidates: imageSearchResults,
+    }
     if (imageSearchSide === 'front') {
-      updateCard(imageSearchCardId, { frontImageUrl: url, frontImageScale: 1, frontImageOffsetX: 0, frontImageOffsetY: 0 })
+      updateCard(imageSearchCardId, {
+        frontImageUrl: candidate.url,
+        frontImage: asset,
+        frontImageCandidates: undefined,
+        frontImagePlacement: DEFAULT_IMAGE_PLACEMENT,
+      })
     } else {
-      updateCard(imageSearchCardId, { backImageUrl: url, backImageScale: 1, backImageOffsetX: 0, backImageOffsetY: 0 })
+      updateCard(imageSearchCardId, {
+        backImageUrl: candidate.url,
+        backImage: asset,
+        backImageCandidates: undefined,
+        backImagePlacement: DEFAULT_IMAGE_PLACEMENT,
+      })
     }
     setImageSearchOpen(false)
     setImageSearchResults([])
@@ -1517,15 +1432,14 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   }
 
   async function fetchImageForQuery(
-    query: string,
+    intent: ReturnType<typeof buildImageSearchIntent>,
     signal: AbortSignal,
   ): Promise<
-    | { ok: true; imageUrl: string; embedded: boolean; title?: string; warning?: ImageSearchWarning }
-    | { ok: false; error: string; code?: string; provider?: string; hint?: string }
+    | { ok: true; imageUrl: string; embedded: boolean; candidate: ImageCandidate; candidates: ImageCandidate[]; warning?: ImageSearchWarning }
+    | { ok: false; error: string; code?: string; provider?: string; hint?: string; candidates?: ImageCandidate[] }
   > {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 25_000)
-    // Combine external signal with per-request timeout
     const combined = AbortSignal.any ? AbortSignal.any([signal, controller.signal]) : signal
     try {
       const response = await fetch('/api/image-search', {
@@ -1533,16 +1447,17 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         headers: { 'Content-Type': 'application/json' },
         signal: combined,
         body: JSON.stringify({
-          query: query.trim(),
+          query: intent.query,
+          intent,
           ...getImageSearchKeys(),
           provider: imageProvider,
-          limit: 1,
+          limit: 8,
           embedImage: imageAgentEmbed,
         }),
       })
       clearTimeout(timeoutId)
       const data = await response.json().catch(() => ({ error: 'Image search failed' })) as {
-        results?: Array<{ link: string; title?: string }>
+        results?: ImageCandidate[]
         dataUrl?: string
         embedded?: boolean
         warning?: ImageSearchWarning
@@ -1560,20 +1475,37 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           hint: data.hint,
         }
       }
-      const result = data.results?.[0]
-      if (!result?.link && !data.dataUrl) {
+      const candidate = data.results?.[0]
+      if (!candidate) {
         return { ok: false, error: 'Provider returned 0 image results', code: 'provider_zero_results' }
       }
-      let imageUrl = data.dataUrl || result!.link
+      if (candidate.needsReview || data.warning?.code === 'low_confidence_image') {
+        return {
+          ok: false,
+          error: 'Best image match needs review',
+          code: 'low_confidence_image',
+          provider: candidate.provider,
+          hint: 'No image was applied. Review the saved alternatives from Search again / Change image.',
+          candidates: data.results ?? [candidate],
+        }
+      }
+
+      let imageUrl = data.dataUrl || candidate.url
       let embedded = Boolean(data.embedded)
-      // Client-side compress if it's a data URL (from server embed) — keeps localStorage small
       if (imageUrl.startsWith('data:') && !imageUrl.startsWith('data:image/gif')) {
         try {
           imageUrl = await compressImage(imageUrl, 1000, 0.75)
           embedded = true
         } catch { /* keep original */ }
       }
-      return { ok: true, imageUrl, embedded, title: result?.title, warning: data.warning }
+      return {
+        ok: true,
+        imageUrl,
+        embedded,
+        candidate,
+        candidates: data.results ?? [candidate],
+        warning: data.warning,
+      }
     } catch {
       clearTimeout(timeoutId)
       if (signal.aborted) return { ok: false, error: 'Image search cancelled', code: 'image_cancelled' }
@@ -1730,7 +1662,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       }
 
       // ── Phase 2: Image search (client-orchestrated, bounded concurrency) ─
-      interface ImageTask { cardId: string; side: 'front' | 'back'; query: string }
+      interface ImageTask { cardId: string; side: 'front' | 'back'; intent: ReturnType<typeof buildImageSearchIntent> }
       const imageTasks: ImageTask[] = []
 
       if (needsAi) {
@@ -1738,22 +1670,22 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         for (const card of generatedCards) {
           if (abortController.signal.aborted) break
           if (imageAgentSide === 'front' || imageAgentSide === 'both') {
-            const query = normalizeImageQuery({
+            const intent = buildImageSearchIntent({
               side: 'front',
               frontText: card.frontText,
               backText: card.backText,
               aiQuery: card.frontImageQuery,
             })
-            if (query) imageTasks.push({ cardId: card.id, side: 'front', query })
+            if (intent.query) imageTasks.push({ cardId: card.id, side: 'front', intent })
           }
           if (imageAgentSide === 'back' || imageAgentSide === 'both') {
-            const query = normalizeImageQuery({
+            const intent = buildImageSearchIntent({
               side: 'back',
               frontText: card.frontText,
               backText: card.backText,
               aiQuery: card.backImageQuery,
             })
-            if (query) imageTasks.push({ cardId: card.id, side: 'back', query })
+            if (intent.query) imageTasks.push({ cardId: card.id, side: 'back', intent })
           }
         }
       } else {
@@ -1769,7 +1701,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               imageTasks.push({
                 cardId: card.id,
                 side: 'front',
-                query: normalizeImageQuery({
+                intent: buildImageSearchIntent({
                   side: 'front',
                   frontText: card.frontText,
                   backText: card.backText,
@@ -1783,7 +1715,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               imageTasks.push({
                 cardId: card.id,
                 side: 'back',
-                query: normalizeImageQuery({
+                intent: buildImageSearchIntent({
                   side: 'back',
                   frontText: card.frontText,
                   backText: card.backText,
@@ -1801,12 +1733,13 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         const IMAGE_CONCURRENCY = 4
         let imagesDone = 0
         let imagesApplied = 0
+        let imagesNeedReview = 0
         let imagesFailed = 0
         const imageFailureReasons = new Map<string, number>()
 
         async function processImageTask(task: ImageTask) {
           if (abortController.signal.aborted) return
-          const result = await fetchImageForQuery(task.query, abortController.signal)
+          const result = await fetchImageForQuery(task.intent, abortController.signal)
           imagesDone++
           if (result.ok) {
             imagesApplied++
@@ -1817,14 +1750,37 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               workingCards[cardIndex] = {
                 ...card,
                 ...(task.side === 'front'
-                  ? { frontImageUrl: result.imageUrl, frontImageScale: 1, frontImageOffsetX: 0, frontImageOffsetY: 0 }
-                  : { backImageUrl: result.imageUrl, backImageScale: 1, backImageOffsetX: 0, backImageOffsetY: 0 }),
+                  ? {
+                      frontImageUrl: result.imageUrl,
+                      frontImage: { ...imageAssetFromCandidate(result.candidate, result.imageUrl), candidates: result.candidates },
+                      frontImageCandidates: undefined,
+                      frontImagePlacement: DEFAULT_IMAGE_PLACEMENT,
+                    }
+                  : {
+                      backImageUrl: result.imageUrl,
+                      backImage: { ...imageAssetFromCandidate(result.candidate, result.imageUrl), candidates: result.candidates },
+                      backImageCandidates: undefined,
+                      backImagePlacement: DEFAULT_IMAGE_PLACEMENT,
+                    }),
               }
             }
             const warning = result.warning?.code === 'image_embed_failed'
               ? ' — found image; embed failed, using remote URL'
               : ''
-            setImageAgentLog((prev) => [...prev, `✓ ${task.side}: ${task.query}${result.embedded ? ' (embedded)' : ''}${warning}`])
+            setImageAgentLog((prev) => [...prev, `✓ ${task.side}: ${task.intent.query}${result.embedded ? ' (embedded)' : ''}${warning}`])
+          } else if (!abortController.signal.aborted && result.code === 'low_confidence_image' && result.candidates?.length) {
+            imagesNeedReview++
+            const cardIndex = workingCards.findIndex((card) => card.id === task.cardId)
+            if (cardIndex >= 0) {
+              workingCards[cardIndex] = {
+                ...workingCards[cardIndex],
+                ...getImageReviewCandidateUpdates(task.side, result.candidates),
+              }
+            }
+            setImageAgentLog((prev) => [
+              ...prev,
+              `⚠ ${task.side}: ${task.intent.query} — needs review; saved ${result.candidates!.length} candidate${result.candidates!.length === 1 ? '' : 's'} for manual choice`,
+            ])
           } else if (!abortController.signal.aborted) {
             imagesFailed++
             const reason = result.provider
@@ -1832,7 +1788,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               : result.error
             imageFailureReasons.set(reason, (imageFailureReasons.get(reason) ?? 0) + 1)
             const hint = result.hint ? ` ${result.hint}` : ''
-            setImageAgentLog((prev) => [...prev, `✕ ${task.side}: ${task.query} — ${reason}.${hint}`])
+            setImageAgentLog((prev) => [...prev, `✕ ${task.side}: ${task.intent.query} — ${reason}.${hint}`])
           }
           setImageAgentProgress({ phase: 'images', done: imagesDone, total: imageTasks.length })
           // Persist periodically so partial results are not lost on error/cancel
@@ -1854,7 +1810,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         persistWorkingState()
 
         const wasCancelled = abortController.signal.aborted
-        const imageOutcome = getImageAgentOutcome(imageTasks.length, imagesApplied)
+        const imageOutcome = imagesNeedReview > 0 && imagesApplied + imagesFailed < imageTasks.length
+          ? 'partial'
+          : getImageAgentOutcome(imageTasks.length, imagesApplied)
         const topReasons = [...imageFailureReasons.entries()]
           .sort((a, b) => b[1] - a[1])
           .slice(0, 2)
@@ -1865,7 +1823,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           : imageOutcome === 'failed'
             ? `✕ Image step failed: 0 images found, ${imagesFailed} failed${topReasons ? ` — ${topReasons}` : ''}`
             : imageOutcome === 'partial'
-              ? `⚠ Partial image step: ${imagesApplied} image${imagesApplied === 1 ? '' : 's'} found, ${imagesFailed} failed${topReasons ? ` — ${topReasons}` : ''}`
+              ? `⚠ Image review needed: ${imagesApplied} applied, ${imagesNeedReview} need review, ${imagesFailed} failed${topReasons ? ` — ${topReasons}` : ''}`
               : `✓ Done: ${imagesApplied} image${imagesApplied === 1 ? '' : 's'} found`
         setImageAgentLog((prev) => [logSummary, ...prev])
         if (wasCancelled) {
@@ -1880,12 +1838,12 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           setImageAgentSummary(summary)
         } else if (imageOutcome === 'partial') {
           setImageAgentSummaryTone('warning')
-          toast.message(needsAi
-            ? `Created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} with ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}; ${imagesFailed} failed`
-            : `Applied ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}; ${imagesFailed} failed`)
+          toast.message('Image options need review', {
+            description: `${imagesApplied} applied · ${imagesNeedReview} saved for review · ${imagesFailed} failed`,
+          })
           setImageAgentSummary(needsAi
-            ? `Created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} · ${imagesApplied} image${imagesApplied === 1 ? '' : 's'} found · ${imagesFailed} failed`
-            : `${imagesApplied} image${imagesApplied === 1 ? '' : 's'} applied · ${imagesFailed} failed`)
+            ? `Created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} · ${imagesApplied} images applied · ${imagesNeedReview} need review · ${imagesFailed} failed`
+            : `${imagesApplied} images applied · ${imagesNeedReview} need review · ${imagesFailed} failed`)
         } else {
           setImageAgentSummaryTone('success')
           toast.success(needsAi
@@ -1967,7 +1925,6 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   )
   const pages = paginateCardsFixedLength(set.cards, set.printSettings.cardsPerPage)
   const selectedRevisionCards = set.cards.filter((card) => selectedRevisionCardIds.includes(card.id))
-  const revisionOriginalById = new Map(set.cards.map((card) => [card.id, card]))
 
   return (
       <div className="space-y-8">
@@ -2100,7 +2057,11 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                     <Button variant="outline" size="sm" onClick={clearRevisionSelection} disabled={selectedRevisionCardIds.length === 0}>
                       Clear selection
                     </Button>
-                    <Button size="sm" onClick={openRevisionDialog} disabled={selectedRevisionCardIds.length === 0}>
+                    <Button variant="outline" size="sm" onClick={() => openRevisionDialog('all')}>
+                      <Sparkle className="mr-2" weight="bold" />
+                      Revise all with AI
+                    </Button>
+                    <Button size="sm" onClick={() => openRevisionDialog('selected')} disabled={selectedRevisionCardIds.length === 0}>
                       <Sparkle className="mr-2" weight="bold" />
                       Revise selected with AI
                     </Button>
@@ -2160,7 +2121,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                       <div className="space-y-3">
                         <div className="flex items-center justify-between">
                           <Label className="text-base font-semibold">Front Image</Label>
-                          {card.frontImageUrl && (
+                          {(card.frontImage?.url || card.frontImageUrl) && (
                             <Button
                               variant="ghost"
                               size="sm"
@@ -2172,20 +2133,19 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                           )}
                         </div>
 
-                        {card.frontImageUrl ? (
+                        {(card.frontImage?.url || card.frontImageUrl) ? (
                           <div className="space-y-3">
-                            <ImageCropEditor
-                              imageUrl={card.frontImageUrl}
+                            <ImagePlacementEditor
+                              imageUrl={card.frontImage?.url || card.frontImageUrl!}
                               alt="Front"
-                              scale={card.frontImageScale ?? 1}
-                              offsetX={card.frontImageOffsetX ?? 0}
-                              offsetY={card.frontImageOffsetY ?? 0}
-                              onChange={({ offsetX, offsetY, scale }) => updateCard(card.id, {
-                                ...(typeof offsetX === 'number' ? { frontImageOffsetX: offsetX } : {}),
-                                ...(typeof offsetY === 'number' ? { frontImageOffsetY: offsetY } : {}),
-                                ...(typeof scale === 'number' ? { frontImageScale: scale } : {}),
-                              })}
+                              placement={getCardSideImage(card, 'front').placement}
+                              onChange={(frontImagePlacement) => updateCard(card.id, { frontImagePlacement })}
                             />
+                            {card.frontImageCandidates?.length ? (
+                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" role="status" aria-live="polite">
+                                {card.frontImageCandidates.length} replacement option{card.frontImageCandidates.length === 1 ? '' : 's'} need review. The current image was kept.
+                              </div>
+                            ) : null}
                             <div className="flex flex-wrap gap-2">
                               <Button
                                 variant="secondary"
@@ -2193,7 +2153,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                                 onClick={() => fileInputRefs.current[`${card.id}-front`]?.click()}
                               >
                                 <ImageIcon className="mr-2" weight="bold" />
-                                Change
+                                Upload change
                               </Button>
                               <Button
                                 variant="outline"
@@ -2201,12 +2161,17 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                                 onClick={() => openWebImageSearch(card.id, 'front')}
                               >
                                 <MagnifyingGlass className="mr-2" weight="bold" />
-                                Search Web Images
+                                {card.frontImageCandidates?.length ? 'Review image options' : 'Search again'}
                               </Button>
                             </div>
                           </div>
                         ) : (
                           <div className="space-y-2">
+                            {card.frontImageCandidates?.length ? (
+                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" role="status" aria-live="polite">
+                                {card.frontImageCandidates.length} image option{card.frontImageCandidates.length === 1 ? '' : 's'} need review. No image was applied.
+                              </div>
+                            ) : null}
                             <div
                               onClick={() => fileInputRefs.current[`${card.id}-front`]?.click()}
                               className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-primary hover:bg-primary/5 transition-all"
@@ -2221,7 +2186,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                               onClick={() => openWebImageSearch(card.id, 'front')}
                             >
                               <MagnifyingGlass className="mr-2" weight="bold" />
-                              Search Web Images
+                              {card.frontImageCandidates?.length ? 'Review image options' : 'Search Web Images'}
                             </Button>
                           </div>
                         )}
@@ -2245,7 +2210,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                       <div className="space-y-3">
                         <div className="flex items-center justify-between">
                           <Label className="text-base font-semibold">Back Image</Label>
-                          {card.backImageUrl && (
+                          {(card.backImage?.url || card.backImageUrl) && (
                             <Button
                               variant="ghost"
                               size="sm"
@@ -2257,20 +2222,19 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                           )}
                         </div>
 
-                        {card.backImageUrl ? (
+                        {(card.backImage?.url || card.backImageUrl) ? (
                           <div className="space-y-3">
-                            <ImageCropEditor
-                              imageUrl={card.backImageUrl}
+                            <ImagePlacementEditor
+                              imageUrl={card.backImage?.url || card.backImageUrl!}
                               alt="Back"
-                              scale={card.backImageScale ?? 1}
-                              offsetX={card.backImageOffsetX ?? 0}
-                              offsetY={card.backImageOffsetY ?? 0}
-                              onChange={({ offsetX, offsetY, scale }) => updateCard(card.id, {
-                                ...(typeof offsetX === 'number' ? { backImageOffsetX: offsetX } : {}),
-                                ...(typeof offsetY === 'number' ? { backImageOffsetY: offsetY } : {}),
-                                ...(typeof scale === 'number' ? { backImageScale: scale } : {}),
-                              })}
+                              placement={getCardSideImage(card, 'back').placement}
+                              onChange={(backImagePlacement) => updateCard(card.id, { backImagePlacement })}
                             />
+                            {card.backImageCandidates?.length ? (
+                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" role="status" aria-live="polite">
+                                {card.backImageCandidates.length} replacement option{card.backImageCandidates.length === 1 ? '' : 's'} need review. The current image was kept.
+                              </div>
+                            ) : null}
                             <div className="flex flex-wrap gap-2">
                               <Button
                                 variant="secondary"
@@ -2278,7 +2242,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                                 onClick={() => fileInputRefs.current[`${card.id}-back`]?.click()}
                               >
                                 <ImageIcon className="mr-2" weight="bold" />
-                                Change
+                                Upload change
                               </Button>
                               <Button
                                 variant="outline"
@@ -2286,12 +2250,17 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                                 onClick={() => openWebImageSearch(card.id, 'back')}
                               >
                                 <MagnifyingGlass className="mr-2" weight="bold" />
-                                Search Web Images
+                                {card.backImageCandidates?.length ? 'Review image options' : 'Search again'}
                               </Button>
                             </div>
                           </div>
                         ) : (
                           <div className="space-y-2">
+                            {card.backImageCandidates?.length ? (
+                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" role="status" aria-live="polite">
+                                {card.backImageCandidates.length} image option{card.backImageCandidates.length === 1 ? '' : 's'} need review. No image was applied.
+                              </div>
+                            ) : null}
                             <div
                               onClick={() => fileInputRefs.current[`${card.id}-back`]?.click()}
                               className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-primary hover:bg-primary/5 transition-all"
@@ -2306,7 +2275,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                               onClick={() => openWebImageSearch(card.id, 'back')}
                             >
                               <MagnifyingGlass className="mr-2" weight="bold" />
-                              Search Web Images
+                              {card.backImageCandidates?.length ? 'Review image options' : 'Search Web Images'}
                             </Button>
                           </div>
                         )}
@@ -2529,7 +2498,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       }}>
         <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Revise selected cards with AI</DialogTitle>
+            <DialogTitle>Revise current deck with AI</DialogTitle>
             <DialogDescription>
               Review the proposed changes before applying them to the selected cards.
             </DialogDescription>
@@ -2548,21 +2517,37 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 value={revisionFeedback}
                 onChange={(event) => setRevisionFeedback(event.target.value)}
                 rows={4}
-                placeholder="Make these easier. Fix unnatural English. Make answers shorter. Use British spelling."
+                placeholder="Replace irrelevant images and use wider framing. Make answers shorter. Revise only the selected cards."
                 disabled={revisionLoading}
               />
             </div>
 
-            <label className="flex items-start gap-3 text-sm">
-              <input
-                type="checkbox"
-                className="mt-1"
-                checked={allowRevisionImageChanges}
-                disabled={revisionLoading}
-                onChange={(event) => setAllowRevisionImageChanges(event.target.checked)}
-              />
-              <span>Allow image replacement suggestions. Pixel edits are not supported; use image search or crop/reframe controls after applying text changes.</span>
-            </label>
+            <div className="space-y-2">
+              <Label>Revision scope</Label>
+              <div className="inline-flex flex-wrap gap-1 rounded-md border p-1" role="group" aria-label="Revision scope">
+                {([
+                  ['text', 'Text only'],
+                  ['images', 'Images only'],
+                  ['both', 'Text and images'],
+                ] as const).map(([value, label]) => (
+                  <Button
+                    key={value}
+                    type="button"
+                    size="sm"
+                    variant={revisionScope === value ? 'default' : 'ghost'}
+                    aria-pressed={revisionScope === value}
+                    disabled={revisionLoading}
+                    onClick={() => {
+                      setRevisionScope(value)
+                      setRevisionPreview(null)
+                      setRevisionError(null)
+                    }}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </div>
+            </div>
 
             <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-2 sm:col-span-1">
@@ -2587,13 +2572,13 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
             {revisionPreview && (
               <div className="max-h-80 space-y-3 overflow-y-auto rounded-md border p-3">
-                {revisionPreview.map((card, index) => {
-                  const original = revisionOriginalById.get(card.id)
-                  const changes = original ? getChangedFields(original, card) : []
+                {selectedRevisionCards.map((original) => {
+                  const changes = getPatchChanges(original, revisionPreview)
+                  if (changes.length === 0) return null
                   return (
-                    <div key={card.id} className="rounded-md border p-3">
+                    <div key={original.id} className="rounded-md border p-3">
                       <div className="mb-2 flex items-center justify-between gap-3">
-                        <p className="font-semibold">Card {set.cards.findIndex((item) => item.id === card.id) + 1 || index + 1}</p>
+                        <p className="font-semibold">Card {set.cards.findIndex((item) => item.id === original.id) + 1}</p>
                         <p className="text-xs text-muted-foreground">{changes.length} change{changes.length === 1 ? '' : 's'}</p>
                       </div>
                       {changes.length === 0 ? (
@@ -2601,7 +2586,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                       ) : (
                         <div className="space-y-3">
                           {changes.map((change) => (
-                            <div key={`${card.id}-${change.field}`} className="grid gap-2 text-sm sm:grid-cols-2">
+                            <div key={`${original.id}-${change.field}`} className="grid gap-2 text-sm sm:grid-cols-2">
                               <div>
                                 <p className="text-xs font-semibold uppercase text-muted-foreground">
                                   {change.field === 'frontText' ? 'Front before'
@@ -2853,17 +2838,22 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-h-[420px] overflow-y-auto pr-1">
                 {imageSearchResults.map((result) => (
                   <button
-                    key={result.link}
+                    key={result.id}
                     className="text-left border rounded-lg overflow-hidden hover:border-primary transition-colors"
-                    onClick={() => handleSelectWebImage(result.link)}
+                    onClick={() => handleSelectWebImage(result)}
                     type="button"
                   >
                     <img
-                      src={result.thumbnailLink || result.link}
+                      src={result.thumbnailUrl || result.url}
                       alt={result.title}
                       className="w-full h-28 object-cover bg-muted"
                     />
-                    <div className="p-2 text-xs line-clamp-2">{result.title}</div>
+                    <div className="space-y-1 p-2 text-xs">
+                      <p className="line-clamp-2">{result.title}</p>
+                      <p className={result.needsReview ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}>
+                        {result.needsReview ? 'Needs review' : `${result.confidence} confidence`} · {result.provider}
+                      </p>
+                    </div>
                   </button>
                 ))}
               </div>

@@ -1,94 +1,99 @@
 import type { FlashCard } from './types'
 
-export interface FlashcardRevisionCard extends Partial<FlashCard> {
-  id: string
-  frontImageQuery?: string
-  backImageQuery?: string
+export type RevisionScope = 'text' | 'images' | 'both'
+export type RevisionPatchField = 'frontText' | 'backText' | 'frontImageQuery' | 'backImageQuery'
+
+export interface RevisionPatchOperation {
+  cardId: string
+  field: RevisionPatchField
+  value: string
 }
 
 export interface RevisionFieldChange {
-  field: 'frontText' | 'backText' | 'frontImageQuery' | 'backImageQuery'
+  field: RevisionPatchField
   before: string
   after: string
 }
 
-export function validateRevisionResult(
-  revisedCards: FlashcardRevisionCard[],
+const TEXT_FIELDS = new Set<RevisionPatchField>(['frontText', 'backText'])
+const IMAGE_FIELDS = new Set<RevisionPatchField>(['frontImageQuery', 'backImageQuery'])
+
+function fieldAllowed(field: RevisionPatchField, scope: RevisionScope): boolean {
+  if (scope === 'both') return true
+  return scope === 'text' ? TEXT_FIELDS.has(field) : IMAGE_FIELDS.has(field)
+}
+
+export function validateRevisionPatches(
+  patches: RevisionPatchOperation[],
   selectedIds: Iterable<string>,
-): { validCards: FlashcardRevisionCard[]; unknownIds: string[] } {
+  scope: RevisionScope,
+): { validPatches: RevisionPatchOperation[]; rejected: string[] } {
   const selected = new Set(selectedIds)
   const seen = new Set<string>()
-  const validCards: FlashcardRevisionCard[] = []
-  const unknownIds: string[] = []
+  const validPatches: RevisionPatchOperation[] = []
+  const rejected: string[] = []
 
-  for (const card of revisedCards) {
-    if (!card?.id || seen.has(card.id)) continue
-    seen.add(card.id)
-    if (!selected.has(card.id)) {
-      unknownIds.push(card.id)
+  for (const patch of patches) {
+    const cardId = typeof patch?.cardId === 'string' ? patch.cardId.trim() : ''
+    const field = patch?.field as RevisionPatchField
+    const value = typeof patch?.value === 'string' ? patch.value.trim() : ''
+    const key = `${cardId}:${field}`
+    if (!cardId || !selected.has(cardId)) {
+      rejected.push(cardId || 'missing card id')
       continue
     }
-    validCards.push(card)
+    if ((!TEXT_FIELDS.has(field) && !IMAGE_FIELDS.has(field)) || !fieldAllowed(field, scope)) {
+      rejected.push(key)
+      continue
+    }
+    if (!value || seen.has(key)) continue
+    seen.add(key)
+    validPatches.push({ cardId, field, value })
   }
 
-  return { validCards, unknownIds }
+  return { validPatches, rejected }
 }
 
-function nextText(value: unknown, fallback: string): string {
-  if (typeof value !== 'string') return fallback
-  const trimmed = value.trim()
-  return trimmed || fallback
-}
-
-export function mergeRevisedCards(
-  originalCards: FlashCard[],
-  revisedCards: FlashcardRevisionCard[],
+export function applyRevisionPatches(
+  cards: FlashCard[],
+  patches: RevisionPatchOperation[],
   selectedIds: Iterable<string>,
-  allowImageChanges = false,
 ): FlashCard[] {
   const selected = new Set(selectedIds)
-  const { validCards } = validateRevisionResult(revisedCards, selected)
-  const byId = new Map(validCards.map((card) => [card.id, card]))
+  const textPatches = patches.filter((patch) => TEXT_FIELDS.has(patch.field) && selected.has(patch.cardId))
+  const byCard = new Map<string, RevisionPatchOperation[]>()
+  for (const patch of textPatches) {
+    byCard.set(patch.cardId, [...(byCard.get(patch.cardId) ?? []), patch])
+  }
 
-  return originalCards.map((card) => {
-    if (!selected.has(card.id)) return card
-    const revised = byId.get(card.id)
-    if (!revised) return card
-
-    return {
-      ...card,
-      frontText: nextText(revised.frontText, card.frontText),
-      backText: nextText(revised.backText, card.backText),
-      ...(allowImageChanges && typeof revised.frontImageUrl === 'string' && revised.frontImageUrl.trim()
-        ? { frontImageUrl: revised.frontImageUrl.trim(), frontImageScale: 1, frontImageOffsetX: 0, frontImageOffsetY: 0 }
-        : {}),
-      ...(allowImageChanges && typeof revised.backImageUrl === 'string' && revised.backImageUrl.trim()
-        ? { backImageUrl: revised.backImageUrl.trim(), backImageScale: 1, backImageOffsetX: 0, backImageOffsetY: 0 }
-        : {}),
+  return cards.map((card) => {
+    const cardPatches = byCard.get(card.id)
+    if (!cardPatches) return card
+    const updates: Partial<FlashCard> = {}
+    for (const patch of cardPatches) {
+      if (patch.field === 'frontText' && patch.value !== card.frontText) updates.frontText = patch.value
+      if (patch.field === 'backText' && patch.value !== card.backText) updates.backText = patch.value
     }
+    return Object.keys(updates).length > 0 ? { ...card, ...updates } : card
   })
 }
 
-export function getChangedFields(
+export function getPatchChanges(
   originalCard: FlashCard,
-  revisedCard: FlashcardRevisionCard,
+  patches: RevisionPatchOperation[],
 ): RevisionFieldChange[] {
-  const changes: RevisionFieldChange[] = []
-  const frontText = nextText(revisedCard.frontText, originalCard.frontText)
-  const backText = nextText(revisedCard.backText, originalCard.backText)
-
-  if (frontText !== originalCard.frontText) {
-    changes.push({ field: 'frontText', before: originalCard.frontText, after: frontText })
-  }
-  if (backText !== originalCard.backText) {
-    changes.push({ field: 'backText', before: originalCard.backText, after: backText })
-  }
-  if (typeof revisedCard.frontImageQuery === 'string' && revisedCard.frontImageQuery.trim()) {
-    changes.push({ field: 'frontImageQuery', before: '', after: revisedCard.frontImageQuery.trim() })
-  }
-  if (typeof revisedCard.backImageQuery === 'string' && revisedCard.backImageQuery.trim()) {
-    changes.push({ field: 'backImageQuery', before: '', after: revisedCard.backImageQuery.trim() })
-  }
-
-  return changes
+  return patches
+    .filter((patch) => patch.cardId === originalCard.id)
+    .map((patch) => ({
+      field: patch.field,
+      before: patch.field === 'frontText'
+        ? originalCard.frontText
+        : patch.field === 'backText'
+          ? originalCard.backText
+          : patch.field === 'frontImageQuery'
+            ? originalCard.frontImage?.title || originalCard.frontImageUrl || 'Current front image'
+            : originalCard.backImage?.title || originalCard.backImageUrl || 'Current back image',
+      after: patch.value,
+    }))
+    .filter((change) => change.before !== change.after)
 }

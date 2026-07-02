@@ -1,3 +1,52 @@
+export type ImagePlacementMode = 'fit' | 'fill'
+
+export interface ImageFocalPoint {
+  x: number
+  y: number
+}
+
+export interface ImagePlacement {
+  mode: ImagePlacementMode
+  zoom: number
+  x: number
+  y: number
+  focalPoint?: ImageFocalPoint
+}
+
+export type ImageCandidateConfidence = 'high' | 'medium' | 'low'
+
+export interface ImageCandidate {
+  id: string
+  url: string
+  thumbnailUrl: string
+  originalUrl: string
+  title: string
+  description?: string
+  provider: string
+  sourcePage?: string
+  width?: number
+  height?: number
+  score: number
+  confidence: ImageCandidateConfidence
+  needsReview: boolean
+  reasons?: string[]
+}
+
+export interface ImageAsset {
+  url: string
+  originalUrl: string
+  title?: string
+  description?: string
+  provider?: string
+  sourcePage?: string
+  width?: number
+  height?: number
+  selectedCandidateId?: string
+  confidence?: ImageCandidateConfidence
+  needsReview?: boolean
+  candidates?: ImageCandidate[]
+}
+
 export interface FlashCard {
   id: string
   frontText: string
@@ -6,6 +55,12 @@ export interface FlashCard {
   backSecondary?: string
   frontImageUrl?: string
   backImageUrl?: string
+  frontImage?: ImageAsset
+  backImage?: ImageAsset
+  frontImageCandidates?: ImageCandidate[]
+  backImageCandidates?: ImageCandidate[]
+  frontImagePlacement?: ImagePlacement
+  backImagePlacement?: ImagePlacement
   imageUrl?: string
   imagePosition?: 'front' | 'back' | 'both'
   frontImageScale?: number

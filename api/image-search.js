@@ -34,10 +34,30 @@ export default async function handler(req, res) {
       provider: body.provider || 'auto',
       limit: Math.min(Number(body.limit || 10), 20),
       keys,
+      intent: body.intent && typeof body.intent === 'object'
+        ? {
+            query,
+            concepts: Array.isArray(body.intent.concepts) ? body.intent.concepts.slice(0, 8).map(String) : [],
+            style: String(body.intent.style || 'neutral'),
+          }
+        : { query },
     })
 
     // Optional single-image embed (used by the agent Phase 2)
     if (body.embedImage && results.length > 0) {
+      if (results[0].needsReview) {
+        return json(res, 200, {
+          results,
+          embedded: false,
+          warning: {
+            error: 'Top image candidate has low relevance confidence',
+            code: 'low_confidence_image',
+            provider: results[0].provider,
+            query,
+            hint: 'Review the backup candidates or try a more specific visual concept.',
+          },
+        })
+      }
       try {
         const dataUrl = await embedImage(results[0].link)
         return json(res, 200, { results, dataUrl, embedded: true })

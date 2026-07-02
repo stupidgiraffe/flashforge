@@ -1,4 +1,6 @@
 import type { FlashCard, PrintSettings } from '@/lib/types'
+import { PlacedImage } from '@/components/PlacedImage'
+import { getCardSideImage } from '@/lib/image-placement'
 import { calculateFontSize } from '@/lib/print-utils'
 import { cn } from '@/lib/utils'
 
@@ -43,22 +45,17 @@ export function FlashCardDisplay({
   const text = isFront ? card.frontText : card.backText
   const secondary = isFront ? card.frontSecondary : card.backSecondary
 
-  let imageUrl: string | undefined
-  let imageScale = 1
-  let imageOffsetX = 0
-  let imageOffsetY = 0
-
-  if (isFront) {
-    imageUrl = card.frontImageUrl || (card.imagePosition === 'front' || card.imagePosition === 'both' ? card.imageUrl : undefined)
-    imageScale = card.frontImageScale ?? card.imageScale ?? 1
-    imageOffsetX = card.frontImageOffsetX ?? 0
-    imageOffsetY = card.frontImageOffsetY ?? 0
-  } else {
-    imageUrl = card.backImageUrl || (card.imagePosition === 'back' || card.imagePosition === 'both' ? card.imageUrl : undefined)
-    imageScale = card.backImageScale ?? card.imageScale ?? 1
-    imageOffsetX = card.backImageOffsetX ?? 0
-    imageOffsetY = card.backImageOffsetY ?? 0
-  }
+  const fallbackMode = settings.imageFit === 'contain' ? 'fit' : 'fill'
+  const sideImage = getCardSideImage(card, side, fallbackMode)
+  const legacySharedUrl = card.imagePosition === side || card.imagePosition === 'both' ? card.imageUrl : undefined
+  const imageUrl = sideImage.url || legacySharedUrl
+  const imagePlacement = sideImage.url
+    ? sideImage.placement
+    : getCardSideImage({
+        ...card,
+        ...(isFront ? { frontImageUrl: legacySharedUrl } : { backImageUrl: legacySharedUrl }),
+        ...(isFront ? { frontImageScale: card.imageScale } : { backImageScale: card.imageScale }),
+      }, side, fallbackMode).placement
 
   const hasText = !!(text || secondary)
   const textLength = (text?.length || 0) + (secondary?.length || 0)
@@ -71,10 +68,6 @@ export function FlashCardDisplay({
   const roundedClass = settings.showRoundedCorners ? 'rounded-xl' : 'rounded-none'
 
   const isBackgroundMode = settings.imageFit === 'background'
-  const imageTransform = imageScale !== 1 || imageOffsetX !== 0 || imageOffsetY !== 0
-    ? `translate(${imageOffsetX}px, ${imageOffsetY}px) scale(${imageScale})`
-    : undefined
-
   // Dynamic image height: use the user-configured ratio, but if there's no text, allow more space.
   // For cards with both image and text, cap at imageHeightRatio. For image-only cards, allow up to 80%.
   const baseRatio = settings.imageHeightRatio
@@ -114,19 +107,11 @@ export function FlashCardDisplay({
       {/* Background image mode: image fills the entire card */}
       {isBackgroundMode && imageUrl && (
         <>
-          <img
+          <PlacedImage
             src={imageUrl}
             alt={text || ''}
-            style={{
-              position: 'absolute',
-              inset: 0,
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-              objectPosition: 'center',
-              zIndex: 0,
-               transform: imageTransform,
-            }}
+            placement={imagePlacement}
+            className="z-0"
           />
           {hasText && (
             <div
@@ -209,29 +194,19 @@ export function FlashCardDisplay({
         <div className="flex-1 flex flex-col items-center justify-center p-6 gap-1 min-h-0">
           {imageUrl && (
             <div
-              className="mb-4 rounded-lg overflow-hidden flex items-center justify-center bg-white/70"
+              className="relative mb-4 overflow-hidden rounded-lg bg-white/70"
               style={{
                 width: '100%',
+                height: `${imageHeight}px`,
                 maxHeight: `${imageHeight}px`,
                 minHeight: `${minImageHeight}px`,
                 flexShrink: hasText ? 1 : 0,
               }}
             >
-              <img
+              <PlacedImage
                 src={imageUrl}
                 alt={text || ''}
-                className="w-full h-full"
-                style={{
-                  objectFit:
-                    settings.imageFit === 'contain'
-                      ? 'contain'
-                      : settings.imageFit === 'center'
-                        ? 'none'
-                        : 'cover',
-                  objectPosition: 'center',
-                  transform: imageTransform,
-                  transformOrigin: 'center center',
-                }}
+                placement={imagePlacement}
               />
             </div>
           )}

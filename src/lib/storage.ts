@@ -1,8 +1,9 @@
-import type { FlashCard, FlashCardSet, PrintSettings, TestSettings } from './types'
+import type { FlashCard, FlashCardSet, ImageAsset, ImageCandidate, PrintSettings, TestSettings } from './types'
 import { DEFAULT_PRINT_SETTINGS, DEFAULT_TEST_SETTINGS } from './types'
+import { normalizeImagePlacement } from './image-placement'
 
 const STORAGE_KEY = 'flashforge_sets'
-const VERSION = '1.1'
+const VERSION = '1.2'
 const MIN_IMAGE_HEIGHT_RATIO = 0.2
 const MAX_IMAGE_HEIGHT_RATIO = 0.95
 
@@ -28,6 +29,12 @@ function normalizeCard(card: Partial<FlashCard>, index = 0): FlashCard {
     backSecondary: typeof card.backSecondary === 'string' ? card.backSecondary : undefined,
     frontImageUrl: typeof card.frontImageUrl === 'string' ? card.frontImageUrl : undefined,
     backImageUrl: typeof card.backImageUrl === 'string' ? card.backImageUrl : undefined,
+    frontImage: normalizeImageAsset(card.frontImage),
+    backImage: normalizeImageAsset(card.backImage),
+    frontImageCandidates: normalizeImageCandidates(card.frontImageCandidates),
+    backImageCandidates: normalizeImageCandidates(card.backImageCandidates),
+    frontImagePlacement: card.frontImagePlacement ? normalizeImagePlacement(card.frontImagePlacement) : undefined,
+    backImagePlacement: card.backImagePlacement ? normalizeImagePlacement(card.backImagePlacement) : undefined,
     imageUrl: typeof card.imageUrl === 'string' ? card.imageUrl : undefined,
     imagePosition: card.imagePosition === 'back' || card.imagePosition === 'both' ? card.imagePosition : 'front',
     frontImageScale: typeof card.frontImageScale === 'number' ? card.frontImageScale : 1,
@@ -40,6 +47,57 @@ function normalizeCard(card: Partial<FlashCard>, index = 0): FlashCard {
     tags: Array.isArray(card.tags) ? card.tags.filter((tag): tag is string => typeof tag === 'string') : undefined,
     category: typeof card.category === 'string' ? card.category : undefined,
   }
+}
+
+function normalizeImageCandidate(value: Partial<ImageCandidate>): ImageCandidate | null {
+  const url = typeof value.url === 'string' ? value.url : ''
+  if (!url) return null
+  const confidence = value.confidence === 'high' || value.confidence === 'medium' ? value.confidence : 'low'
+  return {
+    id: typeof value.id === 'string' && value.id ? value.id : url,
+    url,
+    thumbnailUrl: typeof value.thumbnailUrl === 'string' && value.thumbnailUrl ? value.thumbnailUrl : url,
+    originalUrl: typeof value.originalUrl === 'string' && value.originalUrl ? value.originalUrl : url,
+    title: typeof value.title === 'string' ? value.title : 'Image result',
+    description: typeof value.description === 'string' ? value.description : undefined,
+    provider: typeof value.provider === 'string' ? value.provider : 'unknown',
+    sourcePage: typeof value.sourcePage === 'string' ? value.sourcePage : undefined,
+    width: typeof value.width === 'number' && value.width > 0 ? value.width : undefined,
+    height: typeof value.height === 'number' && value.height > 0 ? value.height : undefined,
+    score: typeof value.score === 'number' && Number.isFinite(value.score) ? value.score : 0,
+    confidence,
+    needsReview: value.needsReview === true || confidence === 'low',
+    reasons: Array.isArray(value.reasons) ? value.reasons.filter((reason): reason is string => typeof reason === 'string') : undefined,
+  }
+}
+
+function normalizeImageAsset(value: ImageAsset | undefined): ImageAsset | undefined {
+  if (!value || typeof value.url !== 'string' || !value.url) return undefined
+  return {
+    url: value.url,
+    originalUrl: typeof value.originalUrl === 'string' && value.originalUrl ? value.originalUrl : value.url,
+    title: typeof value.title === 'string' ? value.title : undefined,
+    description: typeof value.description === 'string' ? value.description : undefined,
+    provider: typeof value.provider === 'string' ? value.provider : undefined,
+    sourcePage: typeof value.sourcePage === 'string' ? value.sourcePage : undefined,
+    width: typeof value.width === 'number' && value.width > 0 ? value.width : undefined,
+    height: typeof value.height === 'number' && value.height > 0 ? value.height : undefined,
+    selectedCandidateId: typeof value.selectedCandidateId === 'string' ? value.selectedCandidateId : undefined,
+    confidence: value.confidence === 'high' || value.confidence === 'medium' || value.confidence === 'low' ? value.confidence : undefined,
+    needsReview: value.needsReview === true,
+    candidates: Array.isArray(value.candidates)
+      ? value.candidates.map(normalizeImageCandidate).filter((candidate): candidate is ImageCandidate => candidate !== null).slice(0, 12)
+      : undefined,
+  }
+}
+
+function normalizeImageCandidates(values: ImageCandidate[] | undefined): ImageCandidate[] | undefined {
+  if (!Array.isArray(values)) return undefined
+  const candidates = values
+    .map(normalizeImageCandidate)
+    .filter((candidate): candidate is ImageCandidate => candidate !== null)
+    .slice(0, 12)
+  return candidates.length > 0 ? candidates : undefined
 }
 
 function normalizePrintSettings(settings?: Partial<PrintSettings>): PrintSettings {
