@@ -24,7 +24,7 @@ import { calculatePrintLayout, paginateCardsFixedLength, calculateBackPagePositi
 import { applyRevisionPatches, getPatchChanges, validateRevisionPatches } from '@/lib/flashcard-revision'
 import type { RevisionPatchOperation, RevisionScope } from '@/lib/flashcard-revision'
 import { explainAiAgentError, formatAiAgentError } from '@/lib/ai-agent-errors'
-import { buildImageSearchIntent, getImageAgentOutcome } from '@/lib/image-agent'
+import { buildImageSearchIntent, getImageAgentOutcome, getImageReviewCandidateUpdates, getStoredImageCandidates } from '@/lib/image-agent'
 import { DEFAULT_IMAGE_PLACEMENT, getCardSideImage, imageAssetFromCandidate } from '@/lib/image-placement'
 
 declare global {
@@ -1140,7 +1140,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     try {
       setRevisionLoading(true)
       let imagesApplied = 0
-      let imagesSkipped = 0
+      let imagesNeedReview = 0
+      let imagesFailed = 0
       for (const patch of imagePatches) {
         const card = workingCards.find((item) => item.id === patch.cardId)
         if (!card) continue
@@ -1153,7 +1154,14 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         })
         const result = await fetchImageForQuery(intent, new AbortController().signal)
         if (!result.ok) {
-          imagesSkipped += 1
+          if (result.code === 'low_confidence_image' && result.candidates?.length) {
+            imagesNeedReview += 1
+            workingCards = workingCards.map((item) => item.id === patch.cardId
+              ? { ...item, ...getImageReviewCandidateUpdates(side, result.candidates!) }
+              : item)
+          } else {
+            imagesFailed += 1
+          }
           continue
         }
         imagesApplied += 1
@@ -1165,11 +1173,13 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 ? {
                     frontImageUrl: result.imageUrl,
                     frontImage: { ...imageAssetFromCandidate(result.candidate, result.imageUrl), candidates: result.candidates },
+                    frontImageCandidates: undefined,
                     frontImagePlacement: DEFAULT_IMAGE_PLACEMENT,
                   }
                 : {
                     backImageUrl: result.imageUrl,
                     backImage: { ...imageAssetFromCandidate(result.candidate, result.imageUrl), candidates: result.candidates },
+                    backImageCandidates: undefined,
                     backImagePlacement: DEFAULT_IMAGE_PLACEMENT,
                   }),
             })
@@ -1178,9 +1188,13 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       updateSet((prev) => ({ ...prev, cards: workingCards }))
       setRevisionPreview(null)
       setRevisionDialogOpen(false)
-      if (imagesSkipped > 0) {
-        toast.message('Revision applied with image review needed', {
-          description: `${imagesApplied} image${imagesApplied === 1 ? '' : 's'} replaced; ${imagesSkipped} low-confidence or failed match${imagesSkipped === 1 ? '' : 'es'} left unchanged.`,
+      if (imagesNeedReview > 0) {
+        toast.message('Revision applied; image options need review', {
+          description: `${imagesApplied} replaced · ${imagesNeedReview} saved for manual review · ${imagesFailed} failed`,
+        })
+      } else if (imagesFailed > 0) {
+        toast.message('Revision applied with image search failures', {
+          description: `${imagesApplied} replaced · ${imagesFailed} failed and remained unchanged`,
         })
       } else {
         toast.success('Revision applied')
@@ -1210,12 +1224,14 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           updateCard(cardId, {
             frontImageUrl: compressed,
             frontImage: { url: compressed, originalUrl: compressed, title: file.name, provider: 'upload' },
+            frontImageCandidates: undefined,
             frontImagePlacement: DEFAULT_IMAGE_PLACEMENT,
           })
         } else if (side === 'back') {
           updateCard(cardId, {
             backImageUrl: compressed,
             backImage: { url: compressed, originalUrl: compressed, title: file.name, provider: 'upload' },
+            backImageCandidates: undefined,
             backImagePlacement: DEFAULT_IMAGE_PLACEMENT,
           })
         } else {
@@ -1249,9 +1265,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         frontText: card.frontText,
         backText: card.backText,
       })
-      const asset = side === 'front' ? card.frontImage : card.backImage
       setImageSearchQuery(intent.query)
-      setImageSearchResults(asset?.candidates ?? [])
+      setImageSearchResults(getStoredImageCandidates(card, side))
     }
     setImageSearchCardId(cardId)
     setImageSearchSide(side)
@@ -1318,12 +1333,14 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       updateCard(imageSearchCardId, {
         frontImageUrl: candidate.url,
         frontImage: asset,
+        frontImageCandidates: undefined,
         frontImagePlacement: DEFAULT_IMAGE_PLACEMENT,
       })
     } else {
       updateCard(imageSearchCardId, {
         backImageUrl: candidate.url,
         backImage: asset,
+        backImageCandidates: undefined,
         backImagePlacement: DEFAULT_IMAGE_PLACEMENT,
       })
     }
@@ -1419,7 +1436,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     signal: AbortSignal,
   ): Promise<
     | { ok: true; imageUrl: string; embedded: boolean; candidate: ImageCandidate; candidates: ImageCandidate[]; warning?: ImageSearchWarning }
-    | { ok: false; error: string; code?: string; provider?: string; hint?: string }
+    | { ok: false; error: string; code?: string; provider?: string; hint?: string; candidates?: ImageCandidate[] }
   > {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 25_000)
@@ -1468,7 +1485,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           error: 'Best image match needs review',
           code: 'low_confidence_image',
           provider: candidate.provider,
-          hint: 'Use Change/Search to review backup candidates or try a more specific concept.',
+          hint: 'No image was applied. Review the saved alternatives from Search again / Change image.',
+          candidates: data.results ?? [candidate],
         }
       }
 
@@ -1715,6 +1733,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         const IMAGE_CONCURRENCY = 4
         let imagesDone = 0
         let imagesApplied = 0
+        let imagesNeedReview = 0
         let imagesFailed = 0
         const imageFailureReasons = new Map<string, number>()
 
@@ -1734,11 +1753,13 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                   ? {
                       frontImageUrl: result.imageUrl,
                       frontImage: { ...imageAssetFromCandidate(result.candidate, result.imageUrl), candidates: result.candidates },
+                      frontImageCandidates: undefined,
                       frontImagePlacement: DEFAULT_IMAGE_PLACEMENT,
                     }
                   : {
                       backImageUrl: result.imageUrl,
                       backImage: { ...imageAssetFromCandidate(result.candidate, result.imageUrl), candidates: result.candidates },
+                      backImageCandidates: undefined,
                       backImagePlacement: DEFAULT_IMAGE_PLACEMENT,
                     }),
               }
@@ -1747,6 +1768,19 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               ? ' — found image; embed failed, using remote URL'
               : ''
             setImageAgentLog((prev) => [...prev, `✓ ${task.side}: ${task.intent.query}${result.embedded ? ' (embedded)' : ''}${warning}`])
+          } else if (!abortController.signal.aborted && result.code === 'low_confidence_image' && result.candidates?.length) {
+            imagesNeedReview++
+            const cardIndex = workingCards.findIndex((card) => card.id === task.cardId)
+            if (cardIndex >= 0) {
+              workingCards[cardIndex] = {
+                ...workingCards[cardIndex],
+                ...getImageReviewCandidateUpdates(task.side, result.candidates),
+              }
+            }
+            setImageAgentLog((prev) => [
+              ...prev,
+              `⚠ ${task.side}: ${task.intent.query} — needs review; saved ${result.candidates!.length} candidate${result.candidates!.length === 1 ? '' : 's'} for manual choice`,
+            ])
           } else if (!abortController.signal.aborted) {
             imagesFailed++
             const reason = result.provider
@@ -1776,7 +1810,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         persistWorkingState()
 
         const wasCancelled = abortController.signal.aborted
-        const imageOutcome = getImageAgentOutcome(imageTasks.length, imagesApplied)
+        const imageOutcome = imagesNeedReview > 0 && imagesApplied + imagesFailed < imageTasks.length
+          ? 'partial'
+          : getImageAgentOutcome(imageTasks.length, imagesApplied)
         const topReasons = [...imageFailureReasons.entries()]
           .sort((a, b) => b[1] - a[1])
           .slice(0, 2)
@@ -1787,7 +1823,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           : imageOutcome === 'failed'
             ? `✕ Image step failed: 0 images found, ${imagesFailed} failed${topReasons ? ` — ${topReasons}` : ''}`
             : imageOutcome === 'partial'
-              ? `⚠ Partial image step: ${imagesApplied} image${imagesApplied === 1 ? '' : 's'} found, ${imagesFailed} failed${topReasons ? ` — ${topReasons}` : ''}`
+              ? `⚠ Image review needed: ${imagesApplied} applied, ${imagesNeedReview} need review, ${imagesFailed} failed${topReasons ? ` — ${topReasons}` : ''}`
               : `✓ Done: ${imagesApplied} image${imagesApplied === 1 ? '' : 's'} found`
         setImageAgentLog((prev) => [logSummary, ...prev])
         if (wasCancelled) {
@@ -1802,12 +1838,12 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           setImageAgentSummary(summary)
         } else if (imageOutcome === 'partial') {
           setImageAgentSummaryTone('warning')
-          toast.message(needsAi
-            ? `Created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} with ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}; ${imagesFailed} failed`
-            : `Applied ${imagesApplied} image${imagesApplied === 1 ? '' : 's'}; ${imagesFailed} failed`)
+          toast.message('Image options need review', {
+            description: `${imagesApplied} applied · ${imagesNeedReview} saved for review · ${imagesFailed} failed`,
+          })
           setImageAgentSummary(needsAi
-            ? `Created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} · ${imagesApplied} image${imagesApplied === 1 ? '' : 's'} found · ${imagesFailed} failed`
-            : `${imagesApplied} image${imagesApplied === 1 ? '' : 's'} applied · ${imagesFailed} failed`)
+            ? `Created ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} · ${imagesApplied} images applied · ${imagesNeedReview} need review · ${imagesFailed} failed`
+            : `${imagesApplied} images applied · ${imagesNeedReview} need review · ${imagesFailed} failed`)
         } else {
           setImageAgentSummaryTone('success')
           toast.success(needsAi
@@ -2105,6 +2141,11 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                               placement={getCardSideImage(card, 'front').placement}
                               onChange={(frontImagePlacement) => updateCard(card.id, { frontImagePlacement })}
                             />
+                            {card.frontImageCandidates?.length ? (
+                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" role="status" aria-live="polite">
+                                {card.frontImageCandidates.length} replacement option{card.frontImageCandidates.length === 1 ? '' : 's'} need review. The current image was kept.
+                              </div>
+                            ) : null}
                             <div className="flex flex-wrap gap-2">
                               <Button
                                 variant="secondary"
@@ -2120,12 +2161,17 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                                 onClick={() => openWebImageSearch(card.id, 'front')}
                               >
                                 <MagnifyingGlass className="mr-2" weight="bold" />
-                                Search again
+                                {card.frontImageCandidates?.length ? 'Review image options' : 'Search again'}
                               </Button>
                             </div>
                           </div>
                         ) : (
                           <div className="space-y-2">
+                            {card.frontImageCandidates?.length ? (
+                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" role="status" aria-live="polite">
+                                {card.frontImageCandidates.length} image option{card.frontImageCandidates.length === 1 ? '' : 's'} need review. No image was applied.
+                              </div>
+                            ) : null}
                             <div
                               onClick={() => fileInputRefs.current[`${card.id}-front`]?.click()}
                               className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-primary hover:bg-primary/5 transition-all"
@@ -2140,7 +2186,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                               onClick={() => openWebImageSearch(card.id, 'front')}
                             >
                               <MagnifyingGlass className="mr-2" weight="bold" />
-                              Search Web Images
+                              {card.frontImageCandidates?.length ? 'Review image options' : 'Search Web Images'}
                             </Button>
                           </div>
                         )}
@@ -2184,6 +2230,11 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                               placement={getCardSideImage(card, 'back').placement}
                               onChange={(backImagePlacement) => updateCard(card.id, { backImagePlacement })}
                             />
+                            {card.backImageCandidates?.length ? (
+                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" role="status" aria-live="polite">
+                                {card.backImageCandidates.length} replacement option{card.backImageCandidates.length === 1 ? '' : 's'} need review. The current image was kept.
+                              </div>
+                            ) : null}
                             <div className="flex flex-wrap gap-2">
                               <Button
                                 variant="secondary"
@@ -2199,12 +2250,17 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                                 onClick={() => openWebImageSearch(card.id, 'back')}
                               >
                                 <MagnifyingGlass className="mr-2" weight="bold" />
-                                Search again
+                                {card.backImageCandidates?.length ? 'Review image options' : 'Search again'}
                               </Button>
                             </div>
                           </div>
                         ) : (
                           <div className="space-y-2">
+                            {card.backImageCandidates?.length ? (
+                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" role="status" aria-live="polite">
+                                {card.backImageCandidates.length} image option{card.backImageCandidates.length === 1 ? '' : 's'} need review. No image was applied.
+                              </div>
+                            ) : null}
                             <div
                               onClick={() => fileInputRefs.current[`${card.id}-back`]?.click()}
                               className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-primary hover:bg-primary/5 transition-all"
@@ -2219,7 +2275,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                               onClick={() => openWebImageSearch(card.id, 'back')}
                             >
                               <MagnifyingGlass className="mr-2" weight="bold" />
-                              Search Web Images
+                              {card.backImageCandidates?.length ? 'Review image options' : 'Search Web Images'}
                             </Button>
                           </div>
                         )}
@@ -2795,7 +2851,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                     <div className="space-y-1 p-2 text-xs">
                       <p className="line-clamp-2">{result.title}</p>
                       <p className={result.needsReview ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}>
-                        {result.needsReview ? 'Review match' : `${result.confidence} confidence`} · {result.provider}
+                        {result.needsReview ? 'Needs review' : `${result.confidence} confidence`} · {result.provider}
                       </p>
                     </div>
                   </button>

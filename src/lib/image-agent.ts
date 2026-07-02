@@ -1,3 +1,5 @@
+import type { FlashCard, ImageCandidate } from './types'
+
 export interface NormalizeImageQueryInput {
   side: 'front' | 'back'
   frontText: string
@@ -73,4 +75,19 @@ export function getImageAgentOutcome(total: number, applied: number): ImageAgent
   if (applied <= 0) return 'failed'
   if (applied < total) return 'partial'
   return 'success'
+}
+
+export function getImageReviewCandidateUpdates(
+  side: 'front' | 'back',
+  candidates: ImageCandidate[],
+): Partial<FlashCard> {
+  return side === 'front'
+    ? { frontImageCandidates: candidates }
+    : { backImageCandidates: candidates }
+}
+
+export function getStoredImageCandidates(card: FlashCard, side: 'front' | 'back'): ImageCandidate[] {
+  return side === 'front'
+    ? card.frontImageCandidates ?? card.frontImage?.candidates ?? []
+    : card.backImageCandidates ?? card.backImage?.candidates ?? []
 }

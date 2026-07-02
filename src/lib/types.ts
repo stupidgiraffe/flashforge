@@ -57,6 +57,8 @@ export interface FlashCard {
   backImageUrl?: string
   frontImage?: ImageAsset
   backImage?: ImageAsset
+  frontImageCandidates?: ImageCandidate[]
+  backImageCandidates?: ImageCandidate[]
   frontImagePlacement?: ImagePlacement
   backImagePlacement?: ImagePlacement
   imageUrl?: string

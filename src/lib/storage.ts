@@ -31,6 +31,8 @@ function normalizeCard(card: Partial<FlashCard>, index = 0): FlashCard {
     backImageUrl: typeof card.backImageUrl === 'string' ? card.backImageUrl : undefined,
     frontImage: normalizeImageAsset(card.frontImage),
     backImage: normalizeImageAsset(card.backImage),
+    frontImageCandidates: normalizeImageCandidates(card.frontImageCandidates),
+    backImageCandidates: normalizeImageCandidates(card.backImageCandidates),
     frontImagePlacement: card.frontImagePlacement ? normalizeImagePlacement(card.frontImagePlacement) : undefined,
     backImagePlacement: card.backImagePlacement ? normalizeImagePlacement(card.backImagePlacement) : undefined,
     imageUrl: typeof card.imageUrl === 'string' ? card.imageUrl : undefined,
@@ -87,6 +89,15 @@ function normalizeImageAsset(value: ImageAsset | undefined): ImageAsset | undefi
       ? value.candidates.map(normalizeImageCandidate).filter((candidate): candidate is ImageCandidate => candidate !== null).slice(0, 12)
       : undefined,
   }
+}
+
+function normalizeImageCandidates(values: ImageCandidate[] | undefined): ImageCandidate[] | undefined {
+  if (!Array.isArray(values)) return undefined
+  const candidates = values
+    .map(normalizeImageCandidate)
+    .filter((candidate): candidate is ImageCandidate => candidate !== null)
+    .slice(0, 12)
+  return candidates.length > 0 ? candidates : undefined
 }
 
 function normalizePrintSettings(settings?: Partial<PrintSettings>): PrintSettings {

@@ -48,4 +48,28 @@ describe('Brave image candidate scoring and filtering', () => {
     expect(ranked.some((candidate) => candidate.url.endsWith('/tiny.jpg'))).toBe(false)
     expect(ranked.find((candidate) => candidate.url.endsWith('/logo.png')).score).toBeLessThan(ranked[0].score)
   })
+
+  it('does not penalize teacher-friendly clipart', () => {
+    const ranked = rankImageCandidates([
+      {
+        title: 'Apple clipart',
+        url: 'https://images.example/apple-clipart.png',
+        width: 900,
+        height: 900,
+        provider: 'brave',
+      },
+      {
+        title: 'Apple drawing',
+        url: 'https://images.example/apple-drawing.png',
+        width: 900,
+        height: 900,
+        provider: 'brave',
+      },
+    ], { query: 'apple', concepts: ['apple'] }, 10)
+
+    const clipart = ranked.find((candidate) => candidate.title === 'Apple clipart')
+    const drawing = ranked.find((candidate) => candidate.title === 'Apple drawing')
+    expect(clipart.score).toBe(drawing.score)
+    expect(clipart.reasons).not.toContain('likely logo or icon')
+  })
 })

@@ -3,7 +3,7 @@ const LOW_VALUE_TERMS = new Set([
 ])
 
 const TEXT_HEAVY_PATTERN = /\b(quote|typography|word art|worksheet|poster|infographic|meme|text)\b/i
-const LOGO_PATTERN = /\b(logo|icon|symbol|emoji|clipart|watermark|brand)\b/i
+const LOGO_PATTERN = /\b(logo|icon|symbol|emoji|watermark|brand)\b/i
 const AWKWARD_PATTERN = /\b(panorama|panoramic|banner|wallpaper|extreme close[- ]?up|macro)\b/i
 
 function clamp(value, min, max) {

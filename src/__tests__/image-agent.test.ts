@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildImageSearchIntent, getImageAgentOutcome, normalizeImageQuery } from '../lib/image-agent'
+import { buildImageSearchIntent, getImageAgentOutcome, getImageReviewCandidateUpdates, getStoredImageCandidates, normalizeImageQuery } from '../lib/image-agent'
+import type { FlashCard, ImageCandidate } from '../lib/types'
 
 describe('normalizeImageQuery', () => {
   it('keeps concise literal image queries', () => {
@@ -58,5 +59,41 @@ describe('getImageAgentOutcome', () => {
   it('distinguishes partial and complete image application', () => {
     expect(getImageAgentOutcome(18, 3)).toBe('partial')
     expect(getImageAgentOutcome(18, 18)).toBe('success')
+  })
+})
+
+describe('low-confidence image review candidates', () => {
+  const candidate: ImageCandidate = {
+    id: 'brave:apple',
+    url: 'https://images.example/apple.png',
+    thumbnailUrl: 'https://images.example/apple-thumb.png',
+    originalUrl: 'https://images.example/apple.png',
+    title: 'Apple option',
+    provider: 'brave',
+    score: 40,
+    confidence: 'low',
+    needsReview: true,
+  }
+
+  it('stores candidates on the requested card side without applying an image', () => {
+    expect(getImageReviewCandidateUpdates('front', [candidate])).toEqual({
+      frontImageCandidates: [candidate],
+    })
+  })
+
+  it('prefers saved review candidates when reopening image search', () => {
+    const card: FlashCard = {
+      id: 'card-1',
+      frontText: 'apple',
+      backText: 'manzana',
+      frontImageCandidates: [candidate],
+      frontImage: {
+        url: 'https://images.example/current.png',
+        originalUrl: 'https://images.example/current.png',
+        candidates: [],
+      },
+    }
+
+    expect(getStoredImageCandidates(card, 'front')).toEqual([candidate])
   })
 })
