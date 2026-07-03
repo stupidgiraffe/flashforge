@@ -81,6 +81,10 @@
 }
 
 @media print {
+  html {
+    color-scheme: light !important;
+  }
+
   @page {
     margin: 0;
     size: auto;

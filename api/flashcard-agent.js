@@ -6,6 +6,12 @@ const VALID_MODES = new Set(['create', 'enhance', 'revise'])
 const VALID_REVISION_SCOPES = new Set(['text', 'images', 'both'])
 const TEXT_REVISION_FIELDS = new Set(['frontText', 'backText'])
 const IMAGE_REVISION_FIELDS = new Set(['frontImageQuery', 'backImageQuery'])
+const REVISION_FIELD_ALIASES = new Map([
+  ['fronttext', 'frontText'], ['front', 'frontText'],
+  ['backtext', 'backText'], ['back', 'backText'],
+  ['frontimagequery', 'frontImageQuery'], ['frontimage', 'frontImageQuery'],
+  ['backimagequery', 'backImageQuery'], ['backimage', 'backImageQuery'],
+])
 
 function json(res, status, body) {
   res.statusCode = status
@@ -59,35 +65,65 @@ function revisionFieldAllowed(field, scope) {
   return scope === 'text' ? TEXT_REVISION_FIELDS.has(field) : IMAGE_REVISION_FIELDS.has(field)
 }
 
-export function normalizeRevisionPatches(rawPatches, originalCards, revisionScope = 'both') {
+function canonicalRevisionField(value) {
+  return REVISION_FIELD_ALIASES.get(String(value || '').replace(/[\s_-]/g, '').toLowerCase()) || ''
+}
+
+export function normalizeRevisionPatchResult(rawPatches, originalCards, revisionScope = 'both') {
   const scope = normalizeRevisionScope(revisionScope)
-  const originalsById = new Map(originalCards.map((card) => [card.id, card]))
+  const originalsById = new Map(originalCards.map((card) => [String(card.id).trim().toLowerCase(), card]))
   const seen = new Set()
   const patches = []
+  const rejected = []
+  let noChangeCount = 0
 
   for (const raw of Array.isArray(rawPatches) ? rawPatches : []) {
-    const cardId = String(raw?.cardId || raw?.id || '').trim()
-    const field = String(raw?.field || '').trim()
+    const suppliedId = String(raw?.cardId || raw?.id || '').trim()
+    const original = originalsById.get(suppliedId.toLowerCase())
+    const cardId = original?.id || suppliedId
+    const field = canonicalRevisionField(raw?.field)
     const value = typeof raw?.value === 'string' ? raw.value.trim() : ''
-    const original = originalsById.get(cardId)
     const key = `${cardId}:${field}`
-    if (!original || !revisionFieldAllowed(field, scope) || !value || seen.has(key)) continue
-    if (TEXT_REVISION_FIELDS.has(field) && value === String(original[field] || '').trim()) continue
+    if (!original) {
+      rejected.push({ cardId: suppliedId || undefined, field: field || String(raw?.field || ''), reason: suppliedId ? 'unknown_card' : 'missing_card_id' })
+      continue
+    }
+    if (!field || !revisionFieldAllowed(field, scope)) {
+      rejected.push({ cardId, field: String(raw?.field || ''), reason: field ? 'out_of_scope' : 'unsupported_field' })
+      continue
+    }
+    if (!value) {
+      rejected.push({ cardId, field, reason: 'empty_value' })
+      continue
+    }
+    if (seen.has(key)) {
+      rejected.push({ cardId, field, reason: 'duplicate' })
+      continue
+    }
+    if (TEXT_REVISION_FIELDS.has(field) && value.toLocaleLowerCase() === String(original[field] || '').trim().toLocaleLowerCase()) {
+      noChangeCount += 1
+      continue
+    }
     seen.add(key)
     patches.push({ cardId, field, value })
   }
-  return patches
+  return { patches, rejected, noChanges: patches.length === 0 && rejected.length === 0 && noChangeCount > 0, noChangeCount }
+}
+
+export function normalizeRevisionPatches(rawPatches, originalCards, revisionScope = 'both') {
+  return normalizeRevisionPatchResult(rawPatches, originalCards, revisionScope).patches
 }
 
 function cardResponsesToPatches(rawCards, originalCards, revisionScope) {
   const rawPatches = []
   for (const raw of Array.isArray(rawCards) ? rawCards : []) {
-    const cardId = String(raw?.id || '').trim()
-    for (const field of [...TEXT_REVISION_FIELDS, ...IMAGE_REVISION_FIELDS]) {
-      if (hasOwn(raw, field)) rawPatches.push({ cardId, field, value: raw[field] })
+    const cardId = String(raw?.cardId || raw?.id || '').trim()
+    for (const [key, value] of Object.entries(raw || {})) {
+      const field = canonicalRevisionField(key)
+      if (field) rawPatches.push({ cardId, field, value })
     }
   }
-  return normalizeRevisionPatches(rawPatches, originalCards, revisionScope)
+  return normalizeRevisionPatchResult(rawPatches, originalCards, revisionScope)
 }
 
 export function normalizeCreateCount(count) {
@@ -149,11 +185,13 @@ function normalizedText(rawValue, fallback) {
 }
 
 export function normalizeRevisedCard(raw, originalCard, allowImageRevision = false) {
-  const frontText = hasOwn(raw, 'frontText')
-    ? normalizedText(raw.frontText, originalCard.frontText || '')
+  const frontValue = hasOwn(raw, 'frontText') ? raw.frontText : raw?.front
+  const backValue = hasOwn(raw, 'backText') ? raw.backText : raw?.back
+  const frontText = hasOwn(raw, 'frontText') || hasOwn(raw, 'front')
+    ? normalizedText(frontValue, originalCard.frontText || '')
     : originalCard.frontText || ''
-  const backText = hasOwn(raw, 'backText')
-    ? normalizedText(raw.backText, originalCard.backText || '')
+  const backText = hasOwn(raw, 'backText') || hasOwn(raw, 'back')
+    ? normalizedText(backValue, originalCard.backText || '')
     : originalCard.backText || ''
 
   return {
@@ -362,13 +400,10 @@ async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instru
       const rawPatches = Array.isArray(parsed?.patches) ? parsed.patches : []
 
       if (mode === 'revise') {
-        const patches = rawPatches.length > 0
-          ? normalizeRevisionPatches(rawPatches, cardsForRevision, revisionScope)
+        const revision = rawPatches.length > 0
+          ? normalizeRevisionPatchResult(rawPatches, cardsForRevision, revisionScope)
           : cardResponsesToPatches(rawCards, cardsForRevision, revisionScope)
-        if (patches.length === 0) {
-          throw agentError('AI returned no valid revision patches', 'AI_NO_VALID_PATCHES', 502, 'Try clearer instructions or broaden the revision scope.')
-        }
-        return { patches }
+        return revision
       }
 
       if (rawCards.length === 0) {
