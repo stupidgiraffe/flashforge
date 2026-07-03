@@ -5,6 +5,7 @@ import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
 import type { PrintSettings, CardTheme, DuplexMode, CardType, CardsPerPage, Orientation, PaperSize } from '@/lib/types'
+import { DESIGN_PRESETS } from '@/lib/design-presets'
 import { Palette, TextAlignCenter, TextAlignLeft, TextAlignRight, ArrowsCounterClockwise, Cards } from '@phosphor-icons/react'
 
 interface DesignPanelProps {
@@ -136,6 +137,24 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType, on
           <CardDescription>Choose a visual style for your flashcards</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6 pt-6">
+          <div className="space-y-3">
+            <Label>Printable presets</Label>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {DESIGN_PRESETS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onUpdate(item.updates)}
+                  className="min-h-11 rounded-lg border-2 border-border p-3 text-left transition-colors hover:border-primary/50"
+                >
+                  <div className="text-sm font-semibold">{item.name}</div>
+                  <div className="text-xs text-muted-foreground">{item.description}</div>
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">Presets change appearance only. Paper, card count, duplex alignment, and offsets stay unchanged.</p>
+          </div>
+
           <div className="space-y-3">
             <Label>Theme</Label>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

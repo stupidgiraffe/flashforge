@@ -13,7 +13,7 @@ describe('module load', () => {
 // ---------------------------------------------------------------------------
 // Import helpers
 // ---------------------------------------------------------------------------
-import { extractJson, normalizeGeneratedCard, normalizeRevisedCard, normalizeCreateCount, normalizeRevisionPatches, extractProviderErrorDetail, classifyAiError } from '../flashcard-agent.js'
+import { extractJson, normalizeGeneratedCard, normalizeRevisedCard, normalizeCreateCount, normalizeRevisionPatches, normalizeRevisionPatchResult, extractProviderErrorDetail, classifyAiError } from '../flashcard-agent.js'
 
 // ---------------------------------------------------------------------------
 // extractJson
@@ -131,6 +131,34 @@ describe('normalizeRevisionPatches', () => {
     ], cards, 'text')
 
     expect(patches).toEqual([{ cardId: 'card-1', field: 'frontText', value: 'New front' }])
+  })
+
+  it('repairs id aliases, whitespace, case, and common field aliases', () => {
+    const result = normalizeRevisionPatchResult([
+      { id: ' CARD-1 ', field: 'front_text', value: 'New front' },
+      { cardId: 'card-1', field: 'back', value: 'New back' },
+    ], cards, 'text')
+    expect(result.patches).toEqual([
+      { cardId: 'card-1', field: 'frontText', value: 'New front' },
+      { cardId: 'card-1', field: 'backText', value: 'New back' },
+    ])
+  })
+
+  it('keeps valid text patches and reports invalid image operations', () => {
+    const result = normalizeRevisionPatchResult([
+      { cardId: 'card-1', field: 'frontText', value: 'New front' },
+      { cardId: 'card-1', field: 'frontImageQuery', value: 'sunset photo' },
+      { cardId: 'missing', field: 'backText', value: 'Nope' },
+    ], cards, 'text')
+    expect(result.patches).toEqual([{ cardId: 'card-1', field: 'frontText', value: 'New front' }])
+    expect(result.rejected).toHaveLength(2)
+  })
+
+  it('treats unchanged text as a friendly no-op', () => {
+    const result = normalizeRevisionPatchResult([
+      { cardId: 'card-1', field: 'frontText', value: ' old FRONT ' },
+    ], cards, 'text')
+    expect(result).toMatchObject({ patches: [], rejected: [], noChanges: true })
   })
 })
 

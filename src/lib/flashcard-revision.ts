@@ -15,6 +15,12 @@ export interface RevisionFieldChange {
   after: string
 }
 
+export interface RejectedRevisionPatch {
+  cardId?: string
+  field?: string
+  reason: string
+}
+
 const TEXT_FIELDS = new Set<RevisionPatchField>(['frontText', 'backText'])
 const IMAGE_FIELDS = new Set<RevisionPatchField>(['frontImageQuery', 'backImageQuery'])
 
@@ -28,17 +34,18 @@ export function validateRevisionPatches(
   selectedIds: Iterable<string>,
   scope: RevisionScope,
 ): { validPatches: RevisionPatchOperation[]; rejected: string[] } {
-  const selected = new Set(selectedIds)
+  const selected = new Map([...selectedIds].map((id) => [id.trim().toLowerCase(), id]))
   const seen = new Set<string>()
   const validPatches: RevisionPatchOperation[] = []
   const rejected: string[] = []
 
   for (const patch of patches) {
-    const cardId = typeof patch?.cardId === 'string' ? patch.cardId.trim() : ''
+    const suppliedId = typeof patch?.cardId === 'string' ? patch.cardId.trim() : ''
+    const cardId = selected.get(suppliedId.toLowerCase()) || suppliedId
     const field = patch?.field as RevisionPatchField
     const value = typeof patch?.value === 'string' ? patch.value.trim() : ''
     const key = `${cardId}:${field}`
-    if (!cardId || !selected.has(cardId)) {
+    if (!cardId || !selected.has(cardId.toLowerCase())) {
       rejected.push(cardId || 'missing card id')
       continue
     }

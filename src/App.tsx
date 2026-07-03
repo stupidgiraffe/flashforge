@@ -26,6 +26,9 @@ import type { RevisionPatchOperation, RevisionScope } from '@/lib/flashcard-revi
 import { explainAiAgentError, formatAiAgentError } from '@/lib/ai-agent-errors'
 import { buildImageSearchIntent, getImageAgentOutcome, getImageReviewCandidateUpdates, getStoredImageCandidates } from '@/lib/image-agent'
 import { DEFAULT_IMAGE_PLACEMENT, getCardSideImage, imageAssetFromCandidate } from '@/lib/image-placement'
+import { AiModelPicker } from '@/components/AiModelPicker'
+import { ThemeToggle } from '@/components/ThemeToggle'
+import { combineAbortSignals } from '@/lib/abort-signals'
 
 declare global {
   interface Window {
@@ -420,6 +423,7 @@ function App() {
           </div>
           
           <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
+            <ThemeToggle />
             {!currentSet && (
               <>
                 <input
@@ -783,6 +787,16 @@ interface ImageSearchWarning {
 
 type ImageAgentTargetSide = 'front' | 'back' | 'both'
 type FlashcardAgentMode = 'create' | 'enhance' | 'revise'
+type AgentJobState = 'idle' | 'running' | 'cancelling' | 'saving' | 'failed' | 'complete'
+type CompatibilityMode = 'create' | 'enhance' | 'revise'
+
+interface CompatibilityResult {
+  mode: CompatibilityMode
+  status: 'pending' | 'running' | 'pass' | 'fail'
+  detail?: string
+  code?: string
+  hint?: string
+}
 
 interface ImageAgentCardRequest {
   id: string
@@ -838,6 +852,10 @@ function createAiAgentRequestError(response: Response, data: AiAgentErrorBody, f
   return error
 }
 
+function safeUrlHost(value: string): string {
+  try { return new URL(value).host }
+  catch { return 'invalid base URL' }
+}
 
 
 function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, googleImageSearchCx, onOpenGoogleSettings }: SetEditorProps) {
@@ -862,20 +880,26 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [revisionFeedback, setRevisionFeedback] = useState('')
   const [revisionPreview, setRevisionPreview] = useState<RevisionPatchOperation[] | null>(null)
   const [revisionLoading, setRevisionLoading] = useState(false)
+  const [revisionJobState, setRevisionJobState] = useState<AgentJobState>('idle')
   const [revisionError, setRevisionError] = useState<string | null>(null)
+  const [revisionTechnicalDetails, setRevisionTechnicalDetails] = useState<string | null>(null)
   const [revisionScope, setRevisionScope] = useState<RevisionScope>('both')
   const [aiConnectionTestLoading, setAiConnectionTestLoading] = useState(false)
+  const [compatibilityResults, setCompatibilityResults] = useState<CompatibilityResult[]>([])
   const [imageAgentSide, setImageAgentSide] = useState<ImageAgentTargetSide>('both')
   const [imageAgentQueryTemplate, setImageAgentQueryTemplate] = useState('{front} funny character clear image')
   const [imageAgentEmbed, setImageAgentEmbed] = useState(true)
   const [imageAgentOverwrite, setImageAgentOverwrite] = useState(false)
   const [imageAgentAcceptedRisk, setImageAgentAcceptedRisk] = useState(false)
   const [imageAgentLoading, setImageAgentLoading] = useState(false)
+  const [imageAgentJobState, setImageAgentJobState] = useState<AgentJobState>('idle')
   const [imageAgentLog, setImageAgentLog] = useState<string[]>([])
   const [imageAgentProgress, setImageAgentProgress] = useState<{ phase: 'text' | 'images'; done: number; total: number } | null>(null)
   const [imageAgentSummary, setImageAgentSummary] = useState<string | null>(null)
   const [imageAgentSummaryTone, setImageAgentSummaryTone] = useState<'success' | 'warning' | 'error'>('success')
   const imageAgentCancelRef = useRef<(() => void) | null>(null)
+  const revisionCancelRef = useRef<AbortController | null>(null)
+  const revisionCancelledRef = useRef(false)
   // Image search provider settings (persisted)
   const [imageBraveKey, setImageBraveKey] = useState(() => localStorage.getItem('flashforge_brave_key') ?? '')
   const [imagePixabayKey, setImagePixabayKey] = useState(() => localStorage.getItem('flashforge_pixabay_key') ?? '')
@@ -900,6 +924,25 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   useEffect(() => { localStorage.setItem('flashforge_google_image_key', imageGoogleKey) }, [imageGoogleKey])
   useEffect(() => { localStorage.setItem('flashforge_google_cx', imageGoogleCx) }, [imageGoogleCx])
   useEffect(() => { localStorage.setItem('flashforge_image_provider', imageProvider) }, [imageProvider])
+
+  const agentBusy = revisionLoading || imageAgentLoading || aiConnectionTestLoading
+  useEffect(() => {
+    if (!agentBusy) return
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warnBeforeUnload)
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload)
+  }, [agentBusy])
+
+  function requestEditorExit() {
+    if (agentBusy) {
+      toast.error('AI work is still running', { description: 'Cancel it first. Partial results already saved will be kept.' })
+      return
+    }
+    onBack()
+  }
 
   // Fetch server-side provider config when the Image Search Settings dialog opens
   useEffect(() => {
@@ -1058,6 +1101,62 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     }
   }
 
+  async function runCompatibilityTests() {
+    if (aiConnectionTestLoading || imageAgentLoading || revisionLoading) return
+    if (!flashcardAgentAiKey.trim() || !flashcardAgentModel.trim()) {
+      toast.error('Enter your BYOK AI API key and model first')
+      return
+    }
+    const modes: CompatibilityMode[] = ['create', 'enhance', 'revise']
+    const fixture = { id: 'diagnostic-card-1', frontText: 'sunset', backText: 'the sun going down' }
+    setCompatibilityResults(modes.map((mode) => ({ mode, status: 'pending' })))
+    setAiConnectionTestLoading(true)
+    try {
+      for (const mode of modes) {
+        setCompatibilityResults((prev) => prev.map((item) => item.mode === mode ? { ...item, status: 'running' } : item))
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 25_000)
+        try {
+          const response = await fetch('/api/flashcard-agent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify({
+              mode,
+              title: 'FlashForge compatibility diagnostic',
+              instructions: mode === 'revise' ? 'Change the back text to "sunset".' : 'Return a simple classroom-safe card.',
+              count: 1,
+              existingCards: mode === 'create' ? undefined : [fixture],
+              revisionScope: 'text',
+              aiApiKey: flashcardAgentAiKey.trim(),
+              aiBaseUrl: flashcardAgentBaseUrl.trim(),
+              aiModel: flashcardAgentModel.trim(),
+            }),
+          })
+          const data = await response.json().catch(() => ({ error: 'Provider returned an unreadable response' })) as { cards?: FlashcardAgentGeneratedCard[]; patches?: RevisionPatchOperation[]; noChanges?: boolean } & AiAgentErrorBody
+          if (!response.ok) throw createAiAgentRequestError(response, data, `${mode} diagnostic failed`)
+          const valid = mode === 'revise' ? Array.isArray(data.patches) : Array.isArray(data.cards) && data.cards.length > 0
+          if (!valid) throw new Error(`${mode} diagnostic returned an unexpected response shape`)
+          setCompatibilityResults((prev) => prev.map((item) => item.mode === mode ? { mode, status: 'pass', detail: data.noChanges ? 'Compatible; model suggested no change.' : 'Compatible response received.' } : item))
+        } catch (error) {
+          const requestError = error as AiAgentRequestError
+          const detail = error instanceof Error ? error.message : `${mode} diagnostic failed`
+          setCompatibilityResults((prev) => prev.map((item) => item.mode === mode ? {
+            mode,
+            status: 'fail',
+            detail,
+            code: requestError.code,
+            hint: requestError.hint,
+          } : item))
+        } finally {
+          clearTimeout(timer)
+        }
+      }
+    } finally {
+      setAiConnectionTestLoading(false)
+    }
+  }
+
   async function runRevisionAgent() {
     if (revisionLoading) return
     const selectedCards = set.cards.filter((card) => selectedRevisionCardIds.includes(card.id))
@@ -1075,10 +1174,14 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     }
 
     const controller = new AbortController()
+    revisionCancelRef.current = controller
+    revisionCancelledRef.current = false
     const timer = setTimeout(() => controller.abort(), 55_000)
     try {
       setRevisionLoading(true)
+      setRevisionJobState('running')
       setRevisionError(null)
+      setRevisionTechnicalDetails(null)
       const response = await fetch('/api/flashcard-agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1103,6 +1206,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       clearTimeout(timer)
       const data = await response.json().catch(() => ({ error: 'Flashcard revision failed' })) as {
         patches?: RevisionPatchOperation[]
+        rejected?: Array<{ cardId?: string; field?: string; reason?: string }>
+        noChanges?: boolean
       } & AiAgentErrorBody
       if (!response.ok) {
         throw createAiAgentRequestError(response, data, 'Flashcard revision failed')
@@ -1110,22 +1215,38 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
       const selectedIds = new Set(selectedCards.map((card) => card.id))
       const { validPatches, rejected } = validateRevisionPatches(data.patches ?? [], selectedIds, revisionScope)
-      if (validPatches.length === 0) throw new Error('AI returned no valid changes for the selected cards and scope')
+      const rejectedCount = rejected.length + (data.rejected?.length ?? 0)
+      if (validPatches.length === 0) {
+        setRevisionPreview([])
+        setRevisionJobState('complete')
+        setRevisionError(data.noChanges
+          ? 'No changes suggested. The current cards already match the request.'
+          : 'No safe changes were returned. Your deck was left unchanged.')
+        if (rejectedCount > 0) setRevisionTechnicalDetails(`${rejectedCount} operation${rejectedCount === 1 ? '' : 's'} rejected as invalid, unknown, duplicate, or outside the selected scope.`)
+        toast.message('No changes suggested')
+        return
+      }
       setRevisionPreview(validPatches)
-      if (rejected.length > 0) {
-        setRevisionError(`Ignored ${rejected.length} invalid or out-of-scope operation${rejected.length === 1 ? '' : 's'}.`)
+      setRevisionJobState('complete')
+      if (rejectedCount > 0) {
+        setRevisionError(`Preview ready with ${rejectedCount} rejected operation${rejectedCount === 1 ? '' : 's'}. Valid text changes were preserved.`)
+        setRevisionTechnicalDetails(JSON.stringify(data.rejected ?? rejected, null, 2))
       }
       toast.success('Revision preview ready')
     } catch (error) {
       const msg = (error as Error).name === 'AbortError'
-        ? 'Revision timed out - try fewer cards or shorter feedback'
+        ? revisionCancelledRef.current ? 'Revision cancelled; the deck was left unchanged' : 'Revision timed out - try fewer cards or shorter feedback'
         : error instanceof Error ? error.message : 'Flashcard revision failed'
       const requestError = error as AiAgentRequestError
       const explanation = explainAiAgentError(msg, requestError.code, requestError.hint)
       setRevisionError(`${explanation.title}: ${explanation.detail} ${explanation.action}`)
+      setRevisionTechnicalDetails([`Mode: revise`, `Scope: ${revisionScope}`, `Cards: ${selectedCards.length}`, `Model: ${flashcardAgentModel.trim()}`, `Base host: ${safeUrlHost(flashcardAgentBaseUrl)}`, requestError.code ? `Code: ${requestError.code}` : '', requestError.details ? `Provider detail: ${requestError.details}` : ''].filter(Boolean).join('\n'))
+      setRevisionJobState((error as Error).name === 'AbortError' ? 'complete' : 'failed')
       toast.error(explanation.title, { description: explanation.action })
     } finally {
       clearTimeout(timer)
+      revisionCancelRef.current = null
+      revisionCancelledRef.current = false
       setRevisionLoading(false)
     }
   }
@@ -1139,6 +1260,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
     try {
       setRevisionLoading(true)
+      setRevisionJobState('saving')
       let imagesApplied = 0
       let imagesNeedReview = 0
       let imagesFailed = 0
@@ -1199,6 +1321,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       } else {
         toast.success('Revision applied')
       }
+      setRevisionJobState('complete')
     } finally {
       setRevisionLoading(false)
     }
@@ -1440,7 +1563,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   > {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 25_000)
-    const combined = AbortSignal.any ? AbortSignal.any([signal, controller.signal]) : signal
+    const combined = combineAbortSignals([signal, controller.signal])
     try {
       const response = await fetch('/api/image-search', {
         method: 'POST',
@@ -1541,6 +1664,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
     try {
       setImageAgentLoading(true)
+      setImageAgentJobState('running')
       setImageAgentSummary(null)
       setImageAgentSummaryTone('success')
       setImageAgentLog([])
@@ -1571,7 +1695,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           }
           const batchTimer = setTimeout(() => batchController.abort(), 55_000)
           try {
-            const batchSignal = AbortSignal.any ? AbortSignal.any([abortController.signal, batchController.signal]) : batchController.signal
+            const batchSignal = combineAbortSignals([abortController.signal, batchController.signal])
             const response = await fetch('/api/flashcard-agent', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -1872,8 +1996,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       }
       // Preserve any partial progress already accumulated
       if (hasNewContent) persistWorkingState()
+      setImageAgentJobState(msg === 'Flashcard Agent cancelled' ? 'complete' : 'failed')
     } finally {
       setImageAgentLoading(false)
+      setImageAgentJobState((current) => current === 'running' || current === 'cancelling' ? 'complete' : current)
       setImageAgentProgress(null)
       imageAgentCancelRef.current = null
     }
@@ -1930,7 +2056,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       <div className="space-y-8">
       <div className="no-print flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Button variant="ghost" onClick={onBack} className="mb-3">
+          <Button variant="ghost" onClick={requestEditorExit} className="mb-3" disabled={agentBusy}>
             <ArrowLeft className="mr-2" weight="bold" />
             Back to Sets
           </Button>
@@ -2493,7 +2619,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       </Tabs>
 
       <Dialog open={revisionDialogOpen} onOpenChange={(open) => {
-        if (revisionLoading && !open) return
+        if ((revisionLoading || aiConnectionTestLoading) && !open) return
         setRevisionDialogOpen(open)
       }}>
         <DialogContent className="sm:max-w-3xl">
@@ -2549,24 +2675,32 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div className="space-y-2 sm:col-span-1">
-                <Label htmlFor="revision-agent-model">AI model</Label>
-                <Input id="revision-agent-model" value={flashcardAgentModel} onChange={(event) => setFlashcardAgentModel(event.target.value)} placeholder="your-provider-model" disabled={revisionLoading} />
-              </div>
-              <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="revision-agent-base-url">OpenAI-compatible base URL</Label>
-                <Input id="revision-agent-base-url" value={flashcardAgentBaseUrl} onChange={(event) => setFlashcardAgentBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" disabled={revisionLoading} />
-              </div>
-              <div className="space-y-2 sm:col-span-3">
+            <div className="space-y-4">
+              <div className="space-y-2">
                 <Label htmlFor="revision-agent-ai-key">BYOK AI API key</Label>
                 <Input id="revision-agent-ai-key" type="password" value={flashcardAgentAiKey} onChange={(event) => setFlashcardAgentAiKey(event.target.value)} placeholder="Only sent to your chosen provider when you run revision" disabled={revisionLoading} />
               </div>
+              <AiModelPicker apiKey={flashcardAgentAiKey} baseUrl={flashcardAgentBaseUrl} model={flashcardAgentModel} disabled={revisionLoading || aiConnectionTestLoading} onBaseUrlChange={setFlashcardAgentBaseUrl} onModelChange={setFlashcardAgentModel} />
             </div>
 
             {revisionError && (
-              <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-                {revisionError}
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm">
+                <p className="text-destructive">{revisionError}</p>
+                {revisionTechnicalDetails && <details className="mt-2 text-foreground"><summary className="cursor-pointer font-medium">Technical details</summary><pre className="mt-2 whitespace-pre-wrap text-xs">{revisionTechnicalDetails}</pre></details>}
+              </div>
+            )}
+
+            {compatibilityResults.length > 0 && (
+              <div className="rounded-md border p-3 text-sm">
+                <p className="mb-2 font-medium">Compatibility diagnostics</p>
+                <div className="space-y-2">{compatibilityResults.map((result) => (
+                  <div key={result.mode} className="flex items-start justify-between gap-3">
+                    <span className="capitalize">{result.mode}</span>
+                    <span className={result.status === 'pass' ? 'text-emerald-600 dark:text-emerald-400' : result.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}>
+                      {result.status}{result.detail ? `: ${result.detail}` : ''}{result.code ? ` (${result.code})` : ''}{result.hint ? ` ${result.hint}` : ''}
+                    </span>
+                  </div>
+                ))}</div>
               </div>
             )}
 
@@ -2617,8 +2751,14 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
             <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={testAiConnection} disabled={aiConnectionTestLoading || revisionLoading}>
                 <Sparkle className="mr-2" weight="bold" />
-                {aiConnectionTestLoading ? 'Testing...' : 'Test AI connection'}
+                Test basic creation
               </Button>
+              <Button variant="outline" onClick={runCompatibilityTests} disabled={aiConnectionTestLoading || revisionLoading}>Run compatibility tests</Button>
+              {revisionLoading && (revisionJobState === 'running' || revisionJobState === 'cancelling') && (
+                <Button variant="destructive" disabled={revisionJobState === 'cancelling'} onClick={() => { revisionCancelledRef.current = true; setRevisionJobState('cancelling'); revisionCancelRef.current?.abort() }}>
+                  {revisionJobState === 'cancelling' ? 'Cancelling...' : 'Cancel revision'}
+                </Button>
+              )}
               <Button variant="outline" onClick={() => setRevisionDialogOpen(false)} disabled={revisionLoading}>
                 Cancel
               </Button>
@@ -2626,7 +2766,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 <Sparkle className="mr-2" weight="bold" />
                 {revisionLoading ? 'Revising...' : revisionPreview ? 'Rerun revision' : 'Preview revision'}
               </Button>
-              <Button onClick={applyRevisionPreview} disabled={!revisionPreview || revisionLoading}>
+              <Button onClick={applyRevisionPreview} disabled={!revisionPreview?.length || revisionLoading}>
                 <CheckCircle className="mr-2" weight="bold" />
                 Apply revision
               </Button>
@@ -2636,7 +2776,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       </Dialog>
 
       <Dialog open={imageAgentOpen} onOpenChange={(open) => {
-        if (imageAgentLoading && !open) return
+        if ((imageAgentLoading || aiConnectionTestLoading) && !open) return
         setImageAgentOpen(open)
       }}>
         <DialogContent className="sm:max-w-2xl">
@@ -2647,7 +2787,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-5">
-            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
               FlashForge can help find and attach images, but you choose what to use. You assume responsibility for copyright, likeness, classroom appropriateness, and any other image-use risks.
             </div>
 
@@ -2665,9 +2805,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               <div className="space-y-2">
                 <Label htmlFor="flashcard-agent-mode">Agent mode</Label>
                 <Select value={flashcardAgentMode} onValueChange={(value) => {
-                  if (!imageAgentLoading) setFlashcardAgentMode(value as FlashcardAgentMode)
+                  if (!imageAgentLoading && !aiConnectionTestLoading) setFlashcardAgentMode(value as FlashcardAgentMode)
                 }}>
-                  <SelectTrigger id="flashcard-agent-mode" disabled={imageAgentLoading}><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="flashcard-agent-mode" disabled={imageAgentLoading || aiConnectionTestLoading}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="enhance">Enhance current cards</SelectItem>
                     <SelectItem value="create">Create new cards</SelectItem>
@@ -2686,19 +2826,12 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               <Textarea id="flashcard-agent-instructions" value={flashcardAgentInstructions} onChange={(event) => setFlashcardAgentInstructions(event.target.value)} rows={3} disabled={imageAgentLoading} />
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div className="space-y-2 sm:col-span-1">
-                <Label htmlFor="flashcard-agent-model">AI model</Label>
-                <Input id="flashcard-agent-model" value={flashcardAgentModel} onChange={(event) => setFlashcardAgentModel(event.target.value)} placeholder="your-provider-model" disabled={imageAgentLoading} />
-              </div>
-              <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="flashcard-agent-base-url">OpenAI-compatible base URL</Label>
-                <Input id="flashcard-agent-base-url" value={flashcardAgentBaseUrl} onChange={(event) => setFlashcardAgentBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" disabled={imageAgentLoading} />
-              </div>
-              <div className="space-y-2 sm:col-span-3">
+            <div className="space-y-4">
+              <div className="space-y-2">
                 <Label htmlFor="flashcard-agent-ai-key">BYOK AI API key</Label>
                 <Input id="flashcard-agent-ai-key" type="password" value={flashcardAgentAiKey} onChange={(event) => setFlashcardAgentAiKey(event.target.value)} placeholder="Required for full-deck AI generation; only sent to your chosen provider when you run the agent" disabled={imageAgentLoading} />
               </div>
+              <AiModelPicker apiKey={flashcardAgentAiKey} baseUrl={flashcardAgentBaseUrl} model={flashcardAgentModel} disabled={imageAgentLoading || aiConnectionTestLoading} onBaseUrlChange={setFlashcardAgentBaseUrl} onModelChange={setFlashcardAgentModel} />
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -2754,16 +2887,17 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
             <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={testAiConnection} disabled={aiConnectionTestLoading || imageAgentLoading}>
                 <Sparkle className="mr-2" weight="bold" />
-                {aiConnectionTestLoading ? 'Testing...' : 'Test AI connection'}
+                Test basic creation
               </Button>
+              <Button variant="outline" onClick={runCompatibilityTests} disabled={aiConnectionTestLoading || imageAgentLoading}>Run compatibility tests</Button>
               <Button variant="outline" onClick={() => setImageSearchSettingsOpen(true)}>
                 <Gear className="mr-2" weight="bold" />
                 Image Search Settings
               </Button>
               {imageAgentLoading ? (
-                <Button variant="outline" onClick={() => imageAgentCancelRef.current?.()}>
+                <Button variant="destructive" disabled={imageAgentJobState === 'cancelling'} onClick={() => { setImageAgentJobState('cancelling'); imageAgentCancelRef.current?.() }}>
                   <X className="mr-2" weight="bold" />
-                  Cancel
+                  {imageAgentJobState === 'cancelling' ? 'Cancelling...' : 'Cancel and keep progress'}
                 </Button>
               ) : (
                 <Button variant="outline" onClick={() => setImageAgentOpen(false)}>
@@ -2775,6 +2909,20 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 {imageAgentLoading ? 'Working...' : 'Run Flashcard Agent'}
               </Button>
             </div>
+
+            {compatibilityResults.length > 0 && (
+              <div className="rounded-md border p-3 text-sm">
+                <p className="mb-2 font-medium">Compatibility diagnostics</p>
+                {compatibilityResults.map((result) => (
+                  <div key={result.mode} className="flex items-start justify-between gap-3 py-1">
+                    <span className="capitalize">{result.mode}</span>
+                    <span className={result.status === 'pass' ? 'text-emerald-600 dark:text-emerald-400' : result.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}>
+                      {result.status}{result.detail ? `: ${result.detail}` : ''}{result.code ? ` (${result.code})` : ''}{result.hint ? ` ${result.hint}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {imageAgentProgress && (
               <div className="space-y-1">
