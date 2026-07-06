@@ -2268,7 +2268,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                               onChange={(frontImagePlacement) => updateCard(card.id, { frontImagePlacement })}
                             />
                             {card.frontImageCandidates?.length ? (
-                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" role="status" aria-live="polite">
+                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100" role="status" aria-live="polite">
                                 {card.frontImageCandidates.length} replacement option{card.frontImageCandidates.length === 1 ? '' : 's'} need review. The current image was kept.
                               </div>
                             ) : null}
@@ -2294,7 +2294,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                         ) : (
                           <div className="space-y-2">
                             {card.frontImageCandidates?.length ? (
-                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" role="status" aria-live="polite">
+                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100" role="status" aria-live="polite">
                                 {card.frontImageCandidates.length} image option{card.frontImageCandidates.length === 1 ? '' : 's'} need review. No image was applied.
                               </div>
                             ) : null}
@@ -2357,7 +2357,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                               onChange={(backImagePlacement) => updateCard(card.id, { backImagePlacement })}
                             />
                             {card.backImageCandidates?.length ? (
-                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" role="status" aria-live="polite">
+                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100" role="status" aria-live="polite">
                                 {card.backImageCandidates.length} replacement option{card.backImageCandidates.length === 1 ? '' : 's'} need review. The current image was kept.
                               </div>
                             ) : null}
@@ -2383,7 +2383,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                         ) : (
                           <div className="space-y-2">
                             {card.backImageCandidates?.length ? (
-                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" role="status" aria-live="polite">
+                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100" role="status" aria-live="polite">
                                 {card.backImageCandidates.length} image option{card.backImageCandidates.length === 1 ? '' : 's'} need review. No image was applied.
                               </div>
                             ) : null}
@@ -2461,7 +2461,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 {' · '}{set.cards.length} card{set.cards.length !== 1 ? 's' : ''}
               </CardDescription>
             </CardHeader>
-            <CardContent className="overflow-x-auto overflow-y-hidden rounded-b-xl bg-gradient-to-br from-slate-200 via-slate-100 to-blue-50 p-4 sm:p-6">
+            <CardContent className="overflow-x-auto overflow-y-hidden rounded-b-xl bg-muted/70 p-4 sm:p-6">
               <div ref={previewContainerRef} className="space-y-8 flex flex-col items-center">
                 {pages.map((pageCards, pageIndex) => {
                   const isDoubleSidedPreview =
@@ -3042,28 +3042,28 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               <div className="space-y-2">
                 <Label htmlFor="img-brave-key" className="flex items-center justify-between">
                   <span>Brave Search API token</span>
-                  {serverSearchConfig?.brave && <span className="text-xs text-green-600 flex items-center gap-1"><CheckCircle weight="fill" />Server configured</span>}
+                  {serverSearchConfig?.brave && <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400"><CheckCircle weight="fill" />Server configured</span>}
                 </Label>
                 <Input id="img-brave-key" type="password" value={imageBraveKey} onChange={(e) => setImageBraveKey(e.target.value)} placeholder={serverSearchConfig?.brave ? 'Configured on server — override here (optional)' : 'X-Subscription-Token from Brave API'} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="img-pixabay-key" className="flex items-center justify-between">
                   <span>Pixabay API key</span>
-                  {serverSearchConfig?.pixabay && <span className="text-xs text-green-600 flex items-center gap-1"><CheckCircle weight="fill" />Server configured</span>}
+                  {serverSearchConfig?.pixabay && <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400"><CheckCircle weight="fill" />Server configured</span>}
                 </Label>
                 <Input id="img-pixabay-key" type="password" value={imagePixabayKey} onChange={(e) => setImagePixabayKey(e.target.value)} placeholder={serverSearchConfig?.pixabay ? 'Configured on server — override here (optional)' : 'Pixabay API key (free at pixabay.com/api/docs)'} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="img-pexels-key" className="flex items-center justify-between">
                   <span>Pexels API key</span>
-                  {serverSearchConfig?.pexels && <span className="text-xs text-green-600 flex items-center gap-1"><CheckCircle weight="fill" />Server configured</span>}
+                  {serverSearchConfig?.pexels && <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400"><CheckCircle weight="fill" />Server configured</span>}
                 </Label>
                 <Input id="img-pexels-key" type="password" value={imagePexelsKey} onChange={(e) => setImagePexelsKey(e.target.value)} placeholder={serverSearchConfig?.pexels ? 'Configured on server — override here (optional)' : 'Pexels API key (free at pexels.com/api)'} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="img-google-key" className="flex items-center justify-between">
                   <span>Google API key</span>
-                  {serverSearchConfig?.google && <span className="text-xs text-green-600 flex items-center gap-1"><CheckCircle weight="fill" />Server configured</span>}
+                  {serverSearchConfig?.google && <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400"><CheckCircle weight="fill" />Server configured</span>}
                 </Label>
                 <Input id="img-google-key" type="password" value={imageGoogleKey} onChange={(e) => setImageGoogleKey(e.target.value)} placeholder={serverSearchConfig?.google ? 'Configured on server — override here (optional)' : 'Google API key for Custom Search'} />
               </div>
@@ -3072,7 +3072,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 <Input id="img-google-cx" value={imageGoogleCx} onChange={(e) => setImageGoogleCx(e.target.value)} placeholder="Your Google Custom Search cx" />
               </div>
               {serverSearchConfig && (
-                <div className="rounded-md border border-green-200 bg-green-50 p-3 text-xs text-green-800">
+                <div className="rounded-md border border-green-200 bg-green-50 p-3 text-xs text-green-800 dark:border-green-800 dark:bg-green-950/40 dark:text-green-200">
                   <strong>Server status:</strong> {Object.entries(serverSearchConfig).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'} configured via environment.
                   {serverSearchConfig.openverse && <span> Openverse is always available.</span>}
                 </div>
