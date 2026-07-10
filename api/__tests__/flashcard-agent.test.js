@@ -13,7 +13,7 @@ describe('module load', () => {
 // ---------------------------------------------------------------------------
 // Import helpers
 // ---------------------------------------------------------------------------
-import { extractJson, normalizeGeneratedCard, normalizeRevisedCard, normalizeCreateCount, normalizeRevisionPatches, normalizeRevisionPatchResult, extractProviderErrorDetail, classifyAiError } from '../flashcard-agent.js'
+import { extractJson, normalizeGeneratedCard, normalizeRevisedCard, normalizeCreateCount, normalizeRevisionPatches, normalizeRevisionPatchResult, extractProviderErrorDetail, classifyAiError, extractAssistantText } from '../flashcard-agent.js'
 
 // ---------------------------------------------------------------------------
 // extractJson
@@ -45,6 +45,145 @@ describe('extractJson', () => {
   it('throws on null/empty input', () => {
     expect(() => extractJson('')).toThrow()
     expect(() => extractJson(null)).toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// extractAssistantText — provider response shape variants
+// ---------------------------------------------------------------------------
+describe('extractAssistantText', () => {
+  it('returns ok:true for string assistant content', () => {
+    const data = { choices: [{ message: { content: '{"cards":[]}' }, finish_reason: 'stop' }], model: 'gpt-4o' }
+    const result = extractAssistantText(data)
+    expect(result).toEqual({ ok: true, text: '{"cards":[]}', finishReason: 'stop', providerModel: 'gpt-4o' })
+  })
+
+  it('returns ok:true for array content parts shaped {type,text}', () => {
+    const data = {
+      choices: [{
+        message: { content: [{ type: 'text', text: '{"cards":[]}' }] },
+        finish_reason: 'stop',
+      }],
+      model: 'claude-3',
+    }
+    const result = extractAssistantText(data)
+    expect(result.ok).toBe(true)
+    expect(result.text).toBe('{"cards":[]}')
+  })
+
+  it('returns ok:true for array content parts shaped {text}', () => {
+    const data = {
+      choices: [{
+        message: { content: [{ text: '{"cards":[]}' }] },
+        finish_reason: 'stop',
+      }],
+      model: 'provider-x',
+    }
+    const result = extractAssistantText(data)
+    expect(result.ok).toBe(true)
+    expect(result.text).toBe('{"cards":[]}')
+  })
+
+  it('concatenates multiple text parts', () => {
+    const data = {
+      choices: [{
+        message: { content: [{ type: 'text', text: '{"cards":[' }, { type: 'text', text: ']}' }] },
+        finish_reason: 'stop',
+      }],
+    }
+    const result = extractAssistantText(data)
+    expect(result.ok).toBe(true)
+    expect(result.text).toBe('{"cards":[]}')
+  })
+
+  it('returns ok:true for choices[0].text fallback', () => {
+    const data = { choices: [{ text: '{"cards":[]}', finish_reason: 'stop' }], model: 'legacy' }
+    const result = extractAssistantText(data)
+    expect(result.ok).toBe(true)
+    expect(result.text).toBe('{"cards":[]}')
+  })
+
+  it('detects refusal finish_reason', () => {
+    const data = { choices: [{ message: { content: 'I refuse.' }, finish_reason: 'refusal' }] }
+    const result = extractAssistantText(data)
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('AI_REFUSAL_OR_FILTERED')
+    expect(result.safeDiagnostics).toMatchObject({ reason: 'refusal' })
+  })
+
+  it('detects content_filter finish_reason', () => {
+    const data = { choices: [{ message: { content: 'blocked' }, finish_reason: 'content_filter' }] }
+    const result = extractAssistantText(data)
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('AI_REFUSAL_OR_FILTERED')
+  })
+
+  it('detects tool-call-only responses', () => {
+    const data = {
+      choices: [{
+        message: { content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'x', arguments: '{}' } }] },
+        finish_reason: 'tool_calls',
+      }],
+    }
+    const result = extractAssistantText(data)
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('AI_TOOL_CALL_ONLY')
+    expect(result.safeDiagnostics).toMatchObject({ toolCallsCount: 1 })
+  })
+
+  it('returns AI_EMPTY_RESPONSE for empty string content', () => {
+    const data = { choices: [{ message: { content: '   ' }, finish_reason: 'stop' }] }
+    const result = extractAssistantText(data)
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('AI_EMPTY_RESPONSE')
+  })
+
+  it('returns AI_EMPTY_RESPONSE for null content', () => {
+    const data = { choices: [{ message: { content: null }, finish_reason: 'stop' }] }
+    const result = extractAssistantText(data)
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('AI_EMPTY_RESPONSE')
+  })
+
+  it('returns AI_EMPTY_RESPONSE when content only has empty parts', () => {
+    const data = {
+      choices: [{
+        message: { content: [{ type: 'image', image_url: 'x' }, { type: '', text: '' }] },
+        finish_reason: 'stop',
+      }],
+    }
+    const result = extractAssistantText(data)
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('AI_EMPTY_RESPONSE')
+  })
+
+  it('returns AI_NO_CHOICES for empty choices array', () => {
+    const data = { choices: [], model: 'gpt-4o' }
+    const result = extractAssistantText(data)
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('AI_NO_CHOICES')
+  })
+
+  it('returns AI_NO_CHOICES for missing choices', () => {
+    const data = { model: 'gpt-4o' }
+    const result = extractAssistantText(data)
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('AI_NO_CHOICES')
+  })
+
+  it('returns AI_NO_CHOICES for malformed response', () => {
+    expect(extractAssistantText(null).code).toBe('AI_NO_CHOICES')
+    expect(extractAssistantText(undefined).code).toBe('AI_NO_CHOICES')
+    expect(extractAssistantText('garbage').code).toBe('AI_NO_CHOICES')
+    expect(extractAssistantText([]).code).toBe('AI_NO_CHOICES')
+  })
+
+  it('never leaks secrets in safeDiagnostics', () => {
+    const data = { choices: [{ message: { content: null }, finish_reason: 'stop' }], model: 'secret-model' }
+    const result = extractAssistantText(data)
+    expect(result.safeDiagnostics).not.toHaveProperty('apiKey')
+    expect(result.safeDiagnostics).not.toHaveProperty('token')
+    expect(JSON.stringify(result)).not.toContain('Bearer')
   })
 })
 
@@ -276,6 +415,29 @@ describe('handler', () => {
     expect(data.cards[0].frontText).toBe('Cat')
   })
 
+  it('accepts array content parts ({type,text})', async () => {
+    const aiPayload = {
+      choices: [{
+        message: {
+          content: [{ type: 'text', content: JSON.stringify({ cards: [{ frontText: 'Red', backText: 'A color' }] }) }],
+        },
+      }],
+    }
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(aiPayload),
+    })
+
+    const res = makeRes()
+    await handler(
+      makeReq({ aiApiKey: 'test', aiModel: 'gpt-4o', mode: 'create', title: 'Test', count: 1 }),
+      res,
+    )
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body).cards).toHaveLength(1)
+  })
+
   it('accepts a JSON array as a provider card response', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -310,6 +472,64 @@ describe('handler', () => {
 
     expect(res.statusCode).toBe(502)
     expect(JSON.parse(res.body)).toMatchObject({ code: 'AI_EMPTY_RESPONSE' })
+  })
+
+  it('returns AI_NO_CHOICES when provider returns empty choices', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ choices: [] }),
+    })
+
+    const res = makeRes()
+    await handler(
+      makeReq({ aiApiKey: 'test', aiModel: 'gpt-4o', mode: 'create', title: 'Test', count: 1 }),
+      res,
+    )
+
+    expect(res.statusCode).toBe(502)
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'AI_NO_CHOICES' })
+  })
+
+  it('returns AI_TOOL_CALL_ONLY for tool-call-only responses', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        choices: [{
+          message: { content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'gen', arguments: '{}' } }] },
+          finish_reason: 'tool_calls',
+        }],
+      }),
+    })
+
+    const res = makeRes()
+    await handler(
+      makeReq({ aiApiKey: 'test', aiModel: 'gpt-4o', mode: 'create', title: 'Test', count: 1 }),
+      res,
+    )
+
+    expect(res.statusCode).toBe(502)
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'AI_TOOL_CALL_ONLY' })
+  })
+
+  it('returns AI_REFUSAL_OR_FILTERED for refusal finish_reason', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        choices: [{ message: { content: 'I cannot.' }, finish_reason: 'refusal' }],
+      }),
+    })
+
+    const res = makeRes()
+    await handler(
+      makeReq({ aiApiKey: 'test', aiModel: 'gpt-4o', mode: 'create', title: 'Test', count: 1 }),
+      res,
+    )
+
+    expect(res.statusCode).toBe(502)
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'AI_REFUSAL_OR_FILTERED' })
   })
 
   it('returns structured error when provider returns no usable cards', async () => {
@@ -535,5 +755,25 @@ describe('handler', () => {
     )
     expect(res.statusCode).toBe(400)
     expect(JSON.parse(res.body)).toMatchObject({ code: 'INVALID_BASE_URL' })
+  })
+
+  it('returns AI_TIMEOUT mapped from AbortError (never raw abort message)', async () => {
+    global.fetch = vi.fn().mockImplementation(() => {
+      return new Promise((_, reject) => {
+        // Simulate AbortController.abort() — a DOMException named AbortError
+        const err = new Error('The operation was aborted')
+        err.name = 'AbortError'
+        reject(err)
+      })
+    })
+
+    const res = makeRes()
+    await handler(
+      makeReq({ aiApiKey: 'key', aiModel: 'gpt-4o', mode: 'create', title: 'Test', count: 1 }),
+      res,
+    )
+    const body = JSON.parse(res.body)
+    expect(body.code).toBe('AI_TIMEOUT')
+    expect(body.error).not.toMatch(/signal is aborted without reason/)
   })
 })
