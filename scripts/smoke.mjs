@@ -11,7 +11,8 @@
  * Set environment variables before running:
  *   BRAVE_API_KEY, PIXABAY_API_KEY, PEXELS_API_KEY,
  *   GOOGLE_API_KEY + GOOGLE_CX,
- *   AI_API_KEY, AI_BASE_URL (default https://api.openai.com/v1), AI_MODEL
+ *   FLASHFORGE_AI_BASE_URL (default https://api.openai.com/v1),
+ *   FLASHFORGE_AI_MODEL, FLASHFORGE_AI_API_KEY
  *
  * Any provider whose env vars are absent is skipped — the script never fails
  * for missing optional keys. Key values are never printed.
@@ -122,35 +123,175 @@ async function smokeOpenverse() {
   }
 }
 
-// ── AI provider ─────────────────────────────────────────────────────────────
+// ── AI provider (via the real agent endpoint) ──────────────────────────────
 
 async function smokeAi() {
-  const key = process.env.AI_API_KEY
-  const base = (process.env.AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '')
-  const model = process.env.AI_MODEL
-  if (!key || !model) return row('AI (BYOK)', 'SKIP', 'AI_API_KEY or AI_MODEL not set')
+  const baseUrl = (process.env.FLASHFORGE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '')
+  const model = process.env.FLASHFORGE_AI_MODEL
+  const apiKey = process.env.FLASHFORGE_AI_API_KEY
+  if (!apiKey || !model) return row('AI (BYOK)', 'SKIP', 'FLASHFORGE_AI_API_KEY or FLASHFORGE_AI_MODEL not set')
+
+  const endpoint = `${baseUrl}/api/flashcard-agent`
+  const fixture = { id: 'smoke-card-1', frontText: 'sunset', backText: 'the sun going down' }
+  let failures = 0
+
+  // Scenario A: create 1 card
+  {
+    const label = 'AI create 1 card'
+    try {
+      const res = await timedFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'create',
+          title: 'Smoke test',
+          instructions: 'Return exactly one simple classroom-safe flashcard.',
+          count: 1,
+          aiApiKey: apiKey,
+          aiBaseUrl: baseUrl,
+          aiModel: model,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(`${data.error || 'failed'} (${res.status})`)
+      const cards = Array.isArray(data.cards) ? data.cards : []
+      if (cards.length === 0 || (!cards[0].frontText && !cards[0].backText)) {
+        throw new Error('no usable assistant text in cards')
+      }
+      row(label, 'PASS', `front="${(cards[0].frontText || '').slice(0, 40)}"`)
+    } catch (e) {
+      row(label, 'FAIL', e.message)
+      failures++
+    }
+  }
+
+  // Scenario B: create small batch (3 cards)
+  {
+    const label = 'AI create batch (3 cards)'
+    try {
+      const res = await timedFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'create',
+          title: 'Smoke test batch',
+          instructions: 'Return three simple classroom-safe flashcards on colors.',
+          count: 3,
+          aiApiKey: apiKey,
+          aiBaseUrl: baseUrl,
+          aiModel: model,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(`${data.error || 'failed'} (${res.status})`)
+      const cards = Array.isArray(data.cards) ? data.cards : []
+      if (cards.length === 0 || cards.every((c) => !c.frontText && !c.backText)) {
+        throw new Error('no usable assistant text in batch')
+      }
+      row(label, 'PASS', `${cards.length} card(s) returned`)
+    } catch (e) {
+      row(label, 'FAIL', e.message)
+      failures++
+    }
+  }
+
+  // Scenario C: enhance 1 card
+  {
+    const label = 'AI enhance 1 card'
+    try {
+      const res = await timedFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'enhance',
+          title: 'Smoke test enhance',
+          instructions: 'Improve the card and keep it classroom-safe.',
+          existingCards: [fixture],
+          aiApiKey: apiKey,
+          aiBaseUrl: baseUrl,
+          aiModel: model,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(`${data.error || 'failed'} (${res.status})`)
+      const cards = Array.isArray(data.cards) ? data.cards : []
+      if (cards.length === 0 || (!cards[0].frontText && !cards[0].backText)) {
+        throw new Error('no usable assistant text in enhanced card')
+      }
+      row(label, 'PASS', `front="${(cards[0].frontText || '').slice(0, 40)}"`)
+    } catch (e) {
+      row(label, 'FAIL', e.message)
+      failures++
+    }
+  }
+
+  // Scenario D: revise 1 card
+  {
+    const label = 'AI revise 1 card'
+    try {
+      const res = await timedFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'revise',
+          title: 'Smoke test revise',
+          instructions: 'Change the back text to "sunset".',
+          revisionScope: 'text',
+          existingCards: [fixture],
+          aiApiKey: apiKey,
+          aiBaseUrl: baseUrl,
+          aiModel: model,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(`${data.error || 'failed'} (${res.status})`)
+      const patches = Array.isArray(data.patches) ? data.patches : []
+      row(label, 'PASS', `${patches.length} patch(es)`)
+    } catch (e) {
+      row(label, 'FAIL', e.message)
+      failures++
+    }
+  }
+
+  // Safe response-shape diagnostics (secrets never printed)
+  console.log('\n  Provider response-shape diagnostics:')
   try {
-    const res = await timedFetch(`${base}/chat/completions`, {
+    const res = await timedFetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model,
-        max_tokens: 60,
-        messages: [
-          { role: 'system', content: 'Reply with valid JSON only. Schema: {"ok":true}' },
-          { role: 'user', content: 'Say ok' },
-        ],
+        mode: 'create',
+        title: 'Shape probe',
+        instructions: 'Return one card.',
+        count: 1,
+        aiApiKey: apiKey,
+        aiBaseUrl: baseUrl,
+        aiModel: model,
       }),
     })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`HTTP ${res.status}: ${text.slice(0, 120)}`)
+    const data = await res.json().catch(() => ({}))
+    if (res.ok && data && typeof data === 'object') {
+      const choices = Array.isArray(data.choices) ? data.choices : null
+      const first = choices?.[0]
+      const content = first?.message?.content ?? first?.text ?? null
+      const contentParts = Array.isArray(content) ? content : null
+      const textFromParts = contentParts ? contentParts.map((p) => p?.text ?? p?.content ?? '').filter(Boolean).join('') : null
+      const hasAssistantText = typeof content === 'string' && content.trim().length > 0
+        || (typeof textFromParts === 'string' && textFromParts.trim().length > 0)
+        || (Array.isArray(data.cards) && data.cards.length > 0)
+      const contentShape = contentParts ? `array(${contentParts.length})` : typeof content
+      console.log(`    choices=${choices?.length ?? 0} content-shape=${contentShape} has-assistant-text=${hasAssistantText}`)
+    } else {
+      const code = data?.code || res.status
+      const err = data?.error || 'unknown error'
+      console.log(`    parse ok: false  code=${code} error="${String(err).slice(0, 80)}"`)
     }
-    const data = await res.json()
-    const content = data.choices?.[0]?.message?.content ?? ''
-    row('AI (BYOK)', 'PASS', `model=${model} configured → ${content.slice(0, 60)}`)
   } catch (e) {
-    row('AI (BYOK)', 'FAIL', e.message)
+    console.log(`    diagnostics fetch failed: ${e.message}`)
+  }
+
+  if (failures > 0) {
+    throw new Error('One or more AI scenarios failed — see FAIL rows above.')
   }
 }
 
