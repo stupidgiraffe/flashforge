@@ -412,7 +412,7 @@ function App() {
   return (
     <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-background via-background to-muted">
       <Toaster position="bottom-right" />
-
+      
       <header className="border-b bg-card/80 backdrop-blur-md sticky top-0 z-50 no-print shadow-sm">
         <div className="container mx-auto flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-6 sm:py-5">
           <div>
@@ -421,7 +421,7 @@ function App() {
             </h1>
             <p className="text-sm text-muted-foreground mt-1">Create beautiful printable flashcards & tests</p>
           </div>
-
+          
           <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
             <ThemeToggle />
             {!currentSet && (
@@ -459,24 +459,24 @@ function App() {
                       Backup
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={handleExportBackup}>
-                      <DownloadSimple className="mr-2 w-4 h-4" weight="bold" />
-                      Download All Sets
-                    </DropdownMenuItem>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={handleExportBackup}>
+                        <DownloadSimple className="mr-2 w-4 h-4" weight="bold" />
+                        Download All Sets
+                      </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => importBackupInputRef.current?.click()}>
                       <UploadSimple className="mr-2 w-4 h-4" weight="bold" />
                       Restore from Backup
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => importSetInputRef.current?.click()}>
-                      <UploadSimple className="mr-2 w-4 h-4" weight="bold" />
-                      Import a Set
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setGoogleBackupDialogOpen(true)}>
-                      <LinkSimple className="mr-2 w-4 h-4" weight="bold" />
-                      Google Drive Backups
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
+                      <DropdownMenuItem onClick={() => importSetInputRef.current?.click()}>
+                        <UploadSimple className="mr-2 w-4 h-4" weight="bold" />
+                        Import a Set
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setGoogleBackupDialogOpen(true)}>
+                        <LinkSimple className="mr-2 w-4 h-4" weight="bold" />
+                        Google Drive Backups
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
                 </DropdownMenu>
               </>
             )}
@@ -785,6 +785,7 @@ interface ImageSearchWarning {
   hint?: string
 }
 
+type ImageAgentTargetSide = 'front' | 'back' | 'both'
 type FlashcardAgentMode = 'create' | 'enhance' | 'revise'
 type AgentJobState = 'idle' | 'running' | 'cancelling' | 'saving' | 'failed' | 'complete'
 type CompatibilityMode = 'create' | 'enhance' | 'revise'
@@ -885,7 +886,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [revisionScope, setRevisionScope] = useState<RevisionScope>('both')
   const [aiConnectionTestLoading, setAiConnectionTestLoading] = useState(false)
   const [compatibilityResults, setCompatibilityResults] = useState<CompatibilityResult[]>([])
-  const [imageAgentSide, setImageAgentSide] = useState<'front' | 'back' | 'both'>('both')
+  const [imageAgentSide, setImageAgentSide] = useState<ImageAgentTargetSide>('both')
   const [imageAgentQueryTemplate, setImageAgentQueryTemplate] = useState('{front} funny character clear image')
   const [imageAgentEmbed, setImageAgentEmbed] = useState(true)
   const [imageAgentOverwrite, setImageAgentOverwrite] = useState(false)
@@ -1140,10 +1141,6 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         } catch (error) {
           const requestError = error as AiAgentRequestError
           const rawMessage = error instanceof Error ? error.message : `${mode} diagnostic failed`
-          // Turn opaque provider errors (e.g. "signal is aborted without reason")
-          // into specific, actionable diagnostic copy. explainAiAgentError maps
-          // backend codes to user-friendly messages; fall back to the structured
-          // action text when the message itself is too vague or a raw abort.
           const explanation = explainAiAgentError(rawMessage, requestError.code, requestError.hint)
           const detail = `${explanation.title}. ${explanation.action}`
           setCompatibilityResults((prev) => prev.map((item) => item.mode === mode ? {
@@ -1478,7 +1475,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   }
 
 
-  function buildImageAgentQuery(card: FlashCard, side: 'front' | 'back' | 'both'): string {
+  function buildImageAgentQuery(card: FlashCard, side: ImageAgentTargetSide): string {
     const front = card.frontText.trim()
     const back = card.backText.trim()
     const primary = side === 'back' ? back || front : front || back
@@ -1679,7 +1676,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       const generatedCards: FlashcardAgentGeneratedCard[] = []
 
       if (needsAi) {
-        const requestedCount = Math.max(1, Math.min(Number(flashcardAgentCount || 8), 60))
+        const requestedCount = Math.max(1, Math.min(Number(flashcardAgentCount || 24), 60))
         const batchSize = 5
         const minimumBatches = flashcardAgentMode === 'create' ? Math.ceil(requestedCount / batchSize) : 1
         const maxTextAttempts = flashcardAgentMode === 'create' ? minimumBatches + 1 : 1
@@ -2605,7 +2602,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                       />
                     </Suspense>
                   </div>
-
+                  
                   {set.testSettings.includeAnswerKey && (
                     <div className="border-2 rounded-xl overflow-hidden shadow-md">
                       <Suspense fallback={<LazySectionFallback label="answer key" />}>
@@ -2618,7 +2615,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                   )}
                 </div>
               </CardContent>
-            </CardContent>
+            </Card>
           </TabsContent>
         )}
       </Tabs>
@@ -2812,9 +2809,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 <Select value={flashcardAgentMode} onValueChange={(value) => {
                   if (!imageAgentLoading && !aiConnectionTestLoading) setFlashcardAgentMode(value as FlashcardAgentMode)
                 }}>
-                  <SelectTrigger id="flashcard-agent-mode" disabled={imageAgentLoading || aiConnectionTestLoading}>
-                    <SelectValue />
-                  </SelectTrigger>
+                  <SelectTrigger id="flashcard-agent-mode" disabled={imageAgentLoading || aiConnectionTestLoading}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="enhance">Enhance current cards</SelectItem>
                     <SelectItem value="create">Create new cards</SelectItem>
@@ -2845,7 +2840,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               <div className="space-y-2">
                 <Label htmlFor="image-agent-side">Apply images to</Label>
                 <Select value={imageAgentSide} onValueChange={(value) => {
-                  if (!imageAgentLoading) setImageAgentSide(value as 'front' | 'back' | 'both')
+                  if (!imageAgentLoading) setImageAgentSide(value as ImageAgentTargetSide)
                 }}>
                   <SelectTrigger id="image-agent-side" disabled={imageAgentLoading}>
                     <SelectValue />
@@ -2920,14 +2915,14 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
             {compatibilityResults.length > 0 && (
               <div className="rounded-md border p-3 text-sm">
                 <p className="mb-2 font-medium">Compatibility diagnostics</p>
-                <div className="space-y-2">{compatibilityResults.map((result) => (
+                {compatibilityResults.map((result) => (
                   <div key={result.mode} className="flex items-start justify-between gap-3 py-1">
                     <span className="capitalize">{result.mode}</span>
                     <span className={result.status === 'pass' ? 'text-emerald-600 dark:text-emerald-400' : result.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}>
                       {result.status}{result.detail ? `: ${result.detail}` : ''}{result.code ? ` (${result.code})` : ''}{result.hint ? ` ${result.hint}` : ''}
                     </span>
                   </div>
-                ))}</div>
+                ))}
               </div>
             )}
 
@@ -3076,4 +3071,186 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               </div>
               <div className="space-y-2">
                 <Label htmlFor="img-google-cx">Google Custom Search Engine ID (cx)</Label>
-                <Input id="img-google-cx" value={imageGoogleCx} onChange={(e) =></longcat_think>
+                <Input id="img-google-cx" value={imageGoogleCx} onChange={(e) => setImageGoogleCx(e.target.value)} placeholder="Your Google Custom Search cx" />
+              </div>
+              {serverSearchConfig && (
+                <div className="rounded-md border border-green-200 bg-green-50 p-3 text-xs text-green-800 dark:border-green-800 dark:bg-green-950/40 dark:text-green-200">
+                  <strong>Server status:</strong> {Object.entries(serverSearchConfig).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'} configured via environment.
+                  {serverSearchConfig.openverse && <span> Openverse is always available.</span>}
+                </div>
+              )}
+              <div className="rounded-md border p-3 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="font-medium">Provider test</p>
+                    <p className="text-xs text-muted-foreground">Runs "giraffe" through the selected provider/Auto path without showing keys.</p>
+                  </div>
+                  <Button type="button" variant="outline" onClick={testImageSearchProvider} disabled={imageSearchTestLoading}>
+                    <MagnifyingGlass className="mr-2" weight="bold" />
+                    {imageSearchTestLoading ? 'Testing...' : 'Test image search'}
+                  </Button>
+                </div>
+                {imageSearchTestResult && (
+                  <p className={`mt-3 text-xs ${imageSearchTestResult.startsWith('OK:') ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
+                    {imageSearchTestResult}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <Button onClick={() => setImageSearchSettingsOpen(false)}>Done</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {createPortal(
+        <div className="print-only">
+          {generatedTest ? (
+            <>
+              <div className="page-break-after">
+                <Suspense fallback={null}>
+                  <TestDisplay
+                    questions={generatedTest}
+                    settings={set.testSettings}
+                    showAnswers={false}
+                  />
+                </Suspense>
+              </div>
+
+              {set.testSettings.includeAnswerKey && (
+                <div>
+                  <Suspense fallback={null}>
+                    <AnswerKey
+                      questions={generatedTest}
+                      settings={set.testSettings}
+                    />
+                  </Suspense>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {pages.map((pageCards, pageIndex) => {
+                const isLastPage = pageIndex === pages.length - 1
+                const isDoubleSided =
+                  set.cardType === 'double-sided' &&
+                  set.printSettings.duplexMode &&
+                  set.printSettings.duplexMode !== 'manual'
+
+                const backPageCards = isDoubleSided
+                  ? (() => {
+                      const duplexMode = set.printSettings.duplexMode as 'long-edge' | 'short-edge'
+                      const backPositions = calculateBackPagePositions(
+                        set.printSettings.cardsPerPage,
+                        duplexMode,
+                        set.printSettings.orientation,
+                      )
+                      return backPositions.map((pos) => pageCards[pos])
+                    })()
+                  : null
+
+                return (
+                  <div key={pageIndex}>
+                    <div
+                      className="avoid-break print-page"
+                      style={{
+                        width: set.printSettings.paperSize === 'a4'
+                          ? (set.printSettings.orientation === 'landscape' ? '297mm' : '210mm')
+                          : (set.printSettings.orientation === 'landscape' ? '11in' : '8.5in'),
+                          height: set.printSettings.paperSize === 'a4'
+                            ? (set.printSettings.orientation === 'landscape' ? '210mm' : '297mm')
+                            : (set.printSettings.orientation === 'landscape' ? '8.5in' : '11in'),
+                        padding: `${layout.marginTop}px ${layout.marginRight}px ${layout.marginBottom}px ${layout.marginLeft}px`,
+                        pageBreakAfter: 'always',
+                        breakAfter: 'page',
+                        boxSizing: 'border-box',
+                        overflow: 'hidden',
+                        ['--print-offset-x' as string]: `${set.printSettings.horizontalOffset}px`,
+                        ['--print-offset-y' as string]: `${set.printSettings.verticalOffset}px`,
+                      } as CSSProperties}
+                    >
+                      <div
+                        className="grid"
+                        style={{
+                          gridTemplateColumns: `repeat(${layout.cols}, 1fr)`,
+                          gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
+                          gap: `${layout.gapY}px ${layout.gapX}px`,
+                          width: '100%',
+                          height: '100%',
+                        }}
+                      >
+                        {pageCards.map((card, cardIndex) => (
+                          <FlashCardDisplay
+                            key={card?.id ?? `print-empty-front-${pageIndex}-${cardIndex}`}
+                            card={card}
+                            settings={set.printSettings}
+                            cardWidth={layout.cardWidth}
+                            cardHeight={layout.cardHeight}
+                            cardNumber={card ? pageIndex * set.printSettings.cardsPerPage + cardIndex + 1 : undefined}
+                            showSetTitle={set.title}
+                            printMode={true}
+                          />
+                        ))}
+                      </div>
+                    </div>
+
+                    {isDoubleSided && backPageCards && (
+                      <div
+                        className="avoid-break print-page print-back-page"
+                        style={{
+                          width: set.printSettings.paperSize === 'a4'
+                            ? (set.printSettings.orientation === 'landscape' ? '297mm' : '210mm')
+                            : (set.printSettings.orientation === 'landscape' ? '11in' : '8.5in'),
+                          height: set.printSettings.paperSize === 'a4'
+                            ? (set.printSettings.orientation === 'landscape' ? '210mm' : '297mm')
+                            : (set.printSettings.orientation === 'landscape' ? '8.5in' : '11in'),
+                          padding: `${layout.marginTop}px ${layout.marginRight}px ${layout.marginBottom}px ${layout.marginLeft}px`,
+                          pageBreakAfter: isLastPage ? 'auto' : 'always',
+                          breakAfter: isLastPage ? 'auto' : 'page',
+                          boxSizing: 'border-box',
+                          overflow: 'hidden',
+                          ['--print-offset-x' as string]: `${set.printSettings.horizontalOffset}px`,
+                          ['--print-offset-y' as string]: `${set.printSettings.verticalOffset}px`,
+                          ['--back-page-offset-x' as string]: `${set.printSettings.backPageOffsetX}mm`,
+                          ['--back-page-offset-y' as string]: `${set.printSettings.backPageOffsetY}mm`,
+                        } as CSSProperties}
+                      >
+                        <div
+                          className="grid"
+                          style={{
+                            gridTemplateColumns: `repeat(${layout.cols}, 1fr)`,
+                            gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
+                            gap: `${layout.gapY}px ${layout.gapX}px`,
+                            width: '100%',
+                            height: '100%',
+                          }}
+                        >
+                          {backPageCards.map((card, cardIndex) => (
+                            <FlashCardDisplay
+                              key={card?.id ? `back-${card.id}` : `print-empty-back-${pageIndex}-${cardIndex}`}
+                              card={card}
+                              settings={set.printSettings}
+                              cardWidth={layout.cardWidth}
+                              cardHeight={layout.cardHeight}
+                              side="back"
+                              printMode={true}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </>
+          )}
+        </div>,
+        document.body,
+      )}
+    </div>
+  )
+}
+
+export default App
