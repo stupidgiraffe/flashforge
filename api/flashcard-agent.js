@@ -208,7 +208,6 @@ export function extractAssistantText(data) {
   const finishReason = choice.finish_reason || null
   const providerModel = data.model || null
 
-  // Handle refusal / content_filter / block
   if (finishReason === 'refusal' || finishReason === 'content_filter') {
     return {
       ok: false,
@@ -219,7 +218,6 @@ export function extractAssistantText(data) {
     }
   }
 
-  // Extract text from the various response shapes
   let text = null
   const message = choice.message
 
@@ -241,7 +239,6 @@ export function extractAssistantText(data) {
     text = choice.text
   }
 
-  // Detect tool-call-only responses (no usable assistant text)
   if (!text && message && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
     return {
       ok: false,
@@ -380,7 +377,7 @@ function buildMessages({ mode, title, instructions, createCount, fronts, existin
   if (mode === 'enhance') {
     return {
       temperature: 0.3,
-      system: 'You are an ESL flashcard editor. Return JSON only, no markdown fences. Improve or complete existing classroom flashcards while preserving ids exactly. Fill missing front/back text when useful, keep natural English, keep cards printable, and provide specific image search queries. Schema: {"cards":[{"id":"existing card id","frontText":"short front text","backText":"short answer or translation","frontImageQuery":"specific web image search query for front","backImageQuery":"specific web image search query for back"]}.',
+      system: 'You are an ESL flashcard editor. Return JSON only, no markdown fences. Improve or complete existing classroom flashcards while preserving ids exactly. Fill missing front/back text when useful, keep natural English, keep cards printable, and provide specific image search queries. Schema: {"cards":[{"id":"existing card id","frontText":"short front text","backText":"short answer or translation","frontImageQuery":"specific web image search query for front","backImageQuery":"specific web image search query for back"}]}.',
       user: [
         `Improve/complete these flashcards for "${title}".`,
         `Instructions: ${instructions}`,
@@ -448,7 +445,7 @@ async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instru
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer ' + aiApiKey,
-        }
+        },
         body: JSON.stringify(attemptBody),
       })
 
