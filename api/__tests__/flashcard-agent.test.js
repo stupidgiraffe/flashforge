@@ -419,7 +419,7 @@ describe('handler', () => {
     const aiPayload = {
       choices: [{
         message: {
-          content: [{ type: 'text', content: JSON.stringify({ cards: [{ frontText: 'Red', backText: 'A color' }] }) }],
+          content: [{ type: 'text', text: JSON.stringify({ cards: [{ frontText: 'Red', backText: 'A color' }] }) }],
         },
       }],
     }
