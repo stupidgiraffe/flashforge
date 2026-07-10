@@ -230,8 +230,8 @@ export function extractAssistantText(data) {
       .map((part) => {
         if (typeof part === 'string') return part
         if (part && typeof part === 'object') {
-          if (part.type === 'text' && typeof part.text === 'string') return part.text
-          if (typeof part.text === 'string') return part.text
+          if (part.type === 'text' && (typeof part.text === 'string' || typeof part.content === 'string')) return part.text || part.content
+          if (typeof part.text === 'string' || typeof part.content === 'string') return part.text || part.content
         }
         return ''
       })
@@ -431,7 +431,6 @@ async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instru
     }
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS)
-    // Build a fresh request body each attempt (avoid cross-attempt mutation)
     const attemptBody = {
       model,
       temperature: prompt.temperature,
@@ -449,7 +448,7 @@ async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instru
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer ' + aiApiKey,
-        },
+        }
         body: JSON.stringify(attemptBody),
       })
 
@@ -481,13 +480,8 @@ async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instru
         throw agentError('AI provider returned a non-JSON response', 'AI_PROVIDER_NON_JSON', 502, 'Check that the base URL points to an OpenAI-compatible chat completions API.')
       }
 
-      // Normalize the provider response. extractAssistantText handles string
-      // content, array content parts, choices[0].text fallback, refusal,
-      // tool-call-only, empty, and no-choices shapes.
       const extracted = extractAssistantText(data)
       if (!extracted.ok) {
-        // Only an empty assistant message is worth retrying without JSON mode;
-        // refusals, tool-call-only, and no-choices are terminal.
         if (extracted.code === 'AI_EMPTY_RESPONSE' && includeJsonFormat && attempt < AI_MAX_RETRIES - 1) {
           lastError = agentError(
             extracted.message,
@@ -515,7 +509,7 @@ async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instru
       } catch {
         if (attempt < AI_MAX_RETRIES - 1) {
           lastError = agentError('AI response was not valid JSON', 'AI_INVALID_JSON', 502, 'FlashForge is retrying without JSON mode.')
-          includeJsonFormat = false  // retry without response_format for non-supporting models
+          includeJsonFormat = false
           continue
         }
         throw agentError('AI response was not valid JSON', 'AI_INVALID_JSON', 502, 'Use a chat model with JSON support, or try a more capable OpenAI-compatible model.')
@@ -581,7 +575,6 @@ export default async function handler(req, res) {
   try {
     const body = await readBody(req)
 
-    // Support both compact fronts list (new) and full existingCards (legacy compatibility)
     let existingFronts = []
     if (Array.isArray(body.existingFronts)) {
       existingFronts = body.existingFronts.filter(Boolean).slice(0, MAX_EXISTING_FRONTS)
