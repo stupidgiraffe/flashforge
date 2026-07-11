@@ -28,7 +28,7 @@ async function readBody(req) {
 export function normalizeModelResults(rawModels, provider) {
   return (Array.isArray(rawModels) ? rawModels : [])
     .map((raw) => {
-      const id = String(raw?.id || raw?.name || '').trim()
+      const id = String(raw?.id || '').trim()
       if (!id) return null
       const supported = Array.isArray(raw?.supported_parameters) ? raw.supported_parameters : []
       const promptPrice = Number(raw?.pricing?.prompt)
