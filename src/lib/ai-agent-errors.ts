@@ -65,11 +65,47 @@ export function explainAiAgentError(message: string, code?: string, hint?: strin
     }
   }
 
-  if (normalizedCode === 'AI_TIMEOUT') {
+  if (normalizedCode === 'AI_TIMEOUT' || normalizedCode === 'AI_ABORTED') {
     return {
-      title: 'AI request timed out',
-      detail: raw || 'The provider did not answer before FlashForge gave up.',
-      action: hint || 'Try fewer cards, shorter instructions, or a faster model.',
+      title: normalizedCode === 'AI_TIMEOUT' ? 'AI request timed out' : 'AI request was cancelled',
+      detail: raw || (normalizedCode === 'AI_TIMEOUT'
+        ? 'The provider did not respond before FlashForge gave up waiting.'
+        : 'The request was cancelled before the provider responded.'),
+      action: hint || (normalizedCode === 'AI_TIMEOUT'
+        ? 'Try fewer cards, shorter instructions, or a faster model.'
+        : 'You can retry. If you did not cancel, the network or provider may have dropped the connection.'),
+    }
+  }
+
+  if (normalizedCode === 'AI_EMPTY_RESPONSE') {
+    return {
+      title: 'AI returned an empty message',
+      detail: raw || 'The provider returned an empty assistant message with no usable content.',
+      action: hint || 'Try a different model or check whether the provider supports chat completions.',
+    }
+  }
+
+  if (normalizedCode === 'AI_NO_CHOICES') {
+    return {
+      title: 'AI returned no choices',
+      detail: raw || 'The endpoint accepted the request but returned no usable chat-completions content.',
+      action: hint || 'Try a different model or a simpler provider endpoint.',
+    }
+  }
+
+  if (normalizedCode === 'AI_REFUSAL_OR_FILTERED') {
+    return {
+      title: 'AI request was refused or filtered',
+      detail: raw || 'The model refused the request or the content was filtered by the provider.',
+      action: hint || 'Try rewording your instructions or use a different model.',
+    }
+  }
+
+  if (normalizedCode === 'AI_TOOL_CALL_ONLY') {
+    return {
+      title: 'AI returned only tool calls',
+      detail: raw || 'The model returned tool-call instructions instead of text. This provider or model does not support the chat-completions output FlashForge expects.',
+      action: hint || 'Use a standard chat model that returns plain text or JSON.',
     }
   }
 
@@ -89,13 +125,23 @@ export function explainAiAgentError(message: string, code?: string, hint?: strin
     }
   }
 
-  if (normalizedCode === 'AI_NO_CARDS' || normalizedCode === 'AI_NO_USABLE_CARDS' || normalizedCode === 'AI_EMPTY_RESPONSE') {
+  if (normalizedCode === 'AI_NO_USABLE_CARDS') {
     return {
       title: 'AI returned no usable cards',
-      detail: raw || 'The model response did not contain usable flashcards.',
-      action: hint || 'Try clearer instructions, a smaller batch, or a different model.',
+      detail: raw || 'The model response parsed but contained no usable flashcards.',
+      action: hint || 'Try clearer instructions or a different model.',
     }
   }
+
+  if (normalizedCode === 'AI_NO_CARDS') {
+    return {
+      title: 'AI returned no cards',
+      detail: raw || 'The provider returned a valid JSON response but it contained no cards.',
+      action: hint || 'Try clearer instructions or a different model.',
+    }
+  }
+
+  // ── Fallback heuristics (message text) ──────────────────────────────────
 
   if (lower.includes('local ai api route is not running')) {
     return {

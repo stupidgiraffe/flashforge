@@ -11,7 +11,9 @@
  * Set environment variables before running:
  *   BRAVE_API_KEY, PIXABAY_API_KEY, PEXELS_API_KEY,
  *   GOOGLE_API_KEY + GOOGLE_CX,
- *   AI_API_KEY, AI_BASE_URL (default https://api.openai.com/v1), AI_MODEL
+ *   FLASHFORGE_APP_URL (default http://127.0.0.1:5173),
+ *   FLASHFORGE_AI_BASE_URL (default https://api.openai.com/v1),
+ *   FLASHFORGE_AI_MODEL, FLASHFORGE_AI_API_KEY
  *
  * Any provider whose env vars are absent is skipped — the script never fails
  * for missing optional keys. Key values are never printed.
@@ -30,6 +32,11 @@ function timedFetch(url, init) {
 function row(name, status, detail = '') {
   const icon = status === 'PASS' ? '✅' : status === 'SKIP' ? '⏭ ' : '❌'
   console.log(`  ${icon}  ${name.padEnd(22)} ${status.padEnd(6)}  ${detail}`)
+}
+
+function safeHost(value) {
+  try { return new URL(value).host }
+  catch { return 'invalid-url' }
 }
 
 // ── image providers ─────────────────────────────────────────────────────────
@@ -122,36 +129,91 @@ async function smokeOpenverse() {
   }
 }
 
-// ── AI provider ─────────────────────────────────────────────────────────────
+// ── AI provider (through the FlashForge agent route) ────────────────────────
 
 async function smokeAi() {
-  const key = process.env.AI_API_KEY
-  const base = (process.env.AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '')
-  const model = process.env.AI_MODEL
-  if (!key || !model) return row('AI (BYOK)', 'SKIP', 'AI_API_KEY or AI_MODEL not set')
-  try {
-    const res = await timedFetch(`${base}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
-      body: JSON.stringify({
-        model,
-        max_tokens: 60,
-        messages: [
-          { role: 'system', content: 'Reply with valid JSON only. Schema: {"ok":true}' },
-          { role: 'user', content: 'Say ok' },
-        ],
-      }),
-    })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`HTTP ${res.status}: ${text.slice(0, 120)}`)
+  const appBaseUrl = (process.env.FLASHFORGE_APP_URL || 'http://127.0.0.1:5173').replace(/\/$/, '')
+  const aiBaseUrl = (process.env.FLASHFORGE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '')
+  const model = process.env.FLASHFORGE_AI_MODEL
+  const apiKey = process.env.FLASHFORGE_AI_API_KEY
+  if (!apiKey || !model) return row('AI (BYOK)', 'SKIP', 'FLASHFORGE_AI_API_KEY or FLASHFORGE_AI_MODEL not set')
+
+  const endpoint = `${appBaseUrl}/api/flashcard-agent`
+  const fixture = { id: 'smoke-card-1', frontText: 'sunset', backText: 'the sun going down' }
+  let failures = 0
+
+  console.log(`  AI route host: ${safeHost(appBaseUrl)} · provider host: ${safeHost(aiBaseUrl)} · model configured`)
+
+  async function callAgent(label, payload, validate) {
+    try {
+      const res = await timedFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...payload,
+          aiApiKey: apiKey,
+          aiBaseUrl,
+          aiModel: model,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const code = data.code ? ` ${data.code}` : ''
+        throw new Error(`${data.error || 'failed'} (${res.status}${code})`)
+      }
+      const detail = validate(data)
+      row(label, 'PASS', detail)
+    } catch (e) {
+      row(label, 'FAIL', e.message)
+      failures++
     }
-    const data = await res.json()
-    const content = data.choices?.[0]?.message?.content ?? ''
-    row('AI (BYOK)', 'PASS', `model=${model} configured → ${content.slice(0, 60)}`)
-  } catch (e) {
-    row('AI (BYOK)', 'FAIL', e.message)
   }
+
+  await callAgent('AI create 1 card', {
+    mode: 'create',
+    title: 'Smoke test',
+    instructions: 'Return exactly one simple classroom-safe flashcard.',
+    count: 1,
+  }, (data) => {
+    const cards = Array.isArray(data.cards) ? data.cards : []
+    if (cards.length === 0 || (!cards[0].frontText && !cards[0].backText)) throw new Error('no usable card returned')
+    return `1 normalized card; front="${(cards[0].frontText || '').slice(0, 40)}"`
+  })
+
+  await callAgent('AI create batch', {
+    mode: 'create',
+    title: 'Smoke test batch',
+    instructions: 'Return three simple classroom-safe flashcards on colors.',
+    count: 3,
+  }, (data) => {
+    const cards = Array.isArray(data.cards) ? data.cards : []
+    if (cards.length === 0 || cards.every((card) => !card.frontText && !card.backText)) throw new Error('no usable cards returned')
+    return `${cards.length} normalized card(s)`
+  })
+
+  await callAgent('AI enhance 1 card', {
+    mode: 'enhance',
+    title: 'Smoke test enhance',
+    instructions: 'Improve the card and keep it classroom-safe.',
+    existingCards: [fixture],
+  }, (data) => {
+    const cards = Array.isArray(data.cards) ? data.cards : []
+    if (cards.length === 0 || (!cards[0].frontText && !cards[0].backText)) throw new Error('no usable enhanced card returned')
+    return `${cards.length} normalized card(s)`
+  })
+
+  await callAgent('AI revise 1 card', {
+    mode: 'revise',
+    title: 'Smoke test revise',
+    instructions: 'Change the back text to "sunset".',
+    revisionScope: 'text',
+    existingCards: [fixture],
+  }, (data) => {
+    if (!Array.isArray(data.patches)) throw new Error('normalized patch array missing')
+    return `${data.patches.length} normalized patch(es)`
+  })
+
+  if (failures > 0) throw new Error('One or more AI scenarios failed — see FAIL rows above.')
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────

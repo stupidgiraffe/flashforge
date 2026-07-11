@@ -870,7 +870,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [imageAgentOpen, setImageAgentOpen] = useState(false)
   const [flashcardAgentMode, setFlashcardAgentMode] = useState<FlashcardAgentMode>('enhance')
   const [flashcardAgentInstructions, setFlashcardAgentInstructions] = useState('Create a complete funny, classroom-safe ESL deck. Use short front text, useful back text, and specific real web image search queries for each side.')
-  const [flashcardAgentCount, setFlashcardAgentCount] = useState('24')
+  const [flashcardAgentCount, setFlashcardAgentCount] = useState('8')
   const [flashcardAgentAiKey, setFlashcardAgentAiKey] = useState(() => localStorage.getItem('flashforge_byok_key') ?? '')
   const [flashcardAgentBaseUrl, setFlashcardAgentBaseUrl] = useState(() => localStorage.getItem('flashforge_byok_base_url') ?? 'https://api.openai.com/v1')
   const [flashcardAgentModel, setFlashcardAgentModel] = useState(() => localStorage.getItem('flashforge_byok_model') ?? '')
@@ -1140,7 +1140,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           setCompatibilityResults((prev) => prev.map((item) => item.mode === mode ? { mode, status: 'pass', detail: data.noChanges ? 'Compatible; model suggested no change.' : 'Compatible response received.' } : item))
         } catch (error) {
           const requestError = error as AiAgentRequestError
-          const detail = error instanceof Error ? error.message : `${mode} diagnostic failed`
+          const rawMessage = error instanceof Error ? error.message : `${mode} diagnostic failed`
+          const explanation = explainAiAgentError(rawMessage, requestError.code, requestError.hint)
+          const detail = `${explanation.title}. ${explanation.action}`
           setCompatibilityResults((prev) => prev.map((item) => item.mode === mode ? {
             mode,
             status: 'fail',
@@ -1675,9 +1677,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
       if (needsAi) {
         const requestedCount = Math.max(1, Math.min(Number(flashcardAgentCount || 24), 60))
-        const batchSize = 20
+        const batchSize = 5
         const minimumBatches = flashcardAgentMode === 'create' ? Math.ceil(requestedCount / batchSize) : 1
-        const maxTextAttempts = flashcardAgentMode === 'create' ? minimumBatches + 3 : 1
+        const maxTextAttempts = flashcardAgentMode === 'create' ? minimumBatches + 1 : 1
 
         setImageAgentProgress({ phase: 'text', done: 0, total: maxTextAttempts })
         setImageAgentLog([`Generating text for ${requestedCount} card${requestedCount === 1 ? '' : 's'} (${minimumBatches} batch${minimumBatches === 1 ? '' : 'es'} minimum)...`])
@@ -1736,7 +1738,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
             clearTimeout(batchTimer)
             if ((error as Error).name === 'AbortError') {
               if (abortController.signal.aborted) throw new Error('Flashcard Agent cancelled')
-              throw new Error('Text generation timed out — try a smaller deck or faster model')
+              throw new Error('Create mode timed out before your provider responded. Try fewer cards, shorter instructions, or a faster model.')
             }
             throw error
           } finally {
@@ -2817,7 +2819,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               <div className="space-y-2">
                 <Label htmlFor="flashcard-agent-count">Deck size / new cards</Label>
                 <Input id="flashcard-agent-count" type="number" min="1" max="60" value={flashcardAgentCount} onChange={(event) => setFlashcardAgentCount(event.target.value)} disabled={imageAgentLoading} />
-                <p className="text-xs text-muted-foreground">Default 24. Max 60 per run (larger = slower).</p>
+                <p className="text-xs text-muted-foreground">Default 8. Max 60 per run (larger = slower).</p>
               </div>
             </div>
 

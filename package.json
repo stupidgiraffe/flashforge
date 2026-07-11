@@ -12,7 +12,8 @@
         "preview": "vite preview",
         "test": "vitest run",
         "test:watch": "vitest",
-        "smoke": "node scripts/smoke.mjs"
+        "smoke": "node scripts/smoke.mjs",
+        "smoke:ai": "node scripts/smoke.mjs"
     },
     "dependencies": {
         "@dnd-kit/core": "^6.3.1",

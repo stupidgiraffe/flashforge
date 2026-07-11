@@ -164,6 +164,104 @@ export function extractJson(text) {
   throw new Error('AI response was not valid JSON')
 }
 
+/**
+ * Normalize assistant text from an OpenAI-compatible chat completions
+ * response into a consistent shape. Handles:
+ *   - choices[0].message.content as string
+ *   - choices[0].message.content as array of content parts
+ *     ({ type: 'text', text: '...' } or { text: '...' })
+ *   - choices[0].text (older text-completions fallback)
+ *   - finish_reason-based refusal / content_filter detection
+ *   - tool-call-only responses
+ *   - empty / no-choices / malformed responses
+ *
+ * Returns either:
+ *   { ok: true, text, finishReason, providerModel }
+ * or:
+ *   { ok: false, code, message, hint, safeDiagnostics }
+ *
+ * safeDiagnostics never contains secrets.
+ */
+export function extractAssistantText(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return {
+      ok: false,
+      code: 'AI_NO_CHOICES',
+      message: 'AI provider returned a malformed response',
+      hint: 'Check that the base URL points to an OpenAI-compatible chat completions API.',
+      safeDiagnostics: { reason: 'malformed_response' },
+    }
+  }
+
+  const choices = Array.isArray(data.choices) ? data.choices : []
+  if (choices.length === 0) {
+    return {
+      ok: false,
+      code: 'AI_NO_CHOICES',
+      message: 'AI provider returned no choices in the response',
+      hint: 'Try a different model or check whether the provider supports chat completions.',
+      safeDiagnostics: { reason: 'no_choices', providerModel: data.model || null },
+    }
+  }
+
+  const choice = choices[0]
+  const finishReason = choice.finish_reason || null
+  const providerModel = data.model || null
+
+  if (finishReason === 'refusal' || finishReason === 'content_filter') {
+    return {
+      ok: false,
+      code: 'AI_REFUSAL_OR_FILTERED',
+      message: 'The AI model refused the request or content was filtered',
+      hint: 'Try rewording your instructions or use a different model.',
+      safeDiagnostics: { reason: finishReason, providerModel },
+    }
+  }
+
+  let text = null
+  const message = choice.message
+
+  if (message && typeof message.content === 'string') {
+    text = message.content
+  } else if (message && Array.isArray(message.content)) {
+    const parts = message.content
+      .map((part) => {
+        if (typeof part === 'string') return part
+        if (part && typeof part === 'object') {
+          if (part.type === 'text' && (typeof part.text === 'string' || typeof part.content === 'string')) return part.text || part.content
+          if (typeof part.text === 'string' || typeof part.content === 'string') return part.text || part.content
+        }
+        return ''
+      })
+      .filter(Boolean)
+    text = parts.join('').trim()
+  } else if (typeof choice.text === 'string') {
+    text = choice.text
+  }
+
+  if (!text && message && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    return {
+      ok: false,
+      code: 'AI_TOOL_CALL_ONLY',
+      message: 'The AI model returned tool calls instead of text',
+      hint: 'Use a standard chat model that returns plain text or JSON.',
+      safeDiagnostics: { reason: 'tool_calls_only', finishReason, providerModel, toolCallsCount: message.tool_calls.length },
+    }
+  }
+
+  if (!text || text.trim() === '') {
+    return {
+      ok: false,
+      code: 'AI_EMPTY_RESPONSE',
+      message: 'The AI provider returned an empty assistant message',
+      hint: 'Try a different model or check whether the provider supports chat completions.',
+      safeDiagnostics: { reason: 'empty_content', finishReason, providerModel },
+    }
+  }
+
+  return { ok: true, text, finishReason, providerModel }
+}
+
 export function normalizeGeneratedCard(raw, index) {
   return {
     id: `card-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
@@ -228,16 +326,16 @@ export function extractProviderErrorDetail(detail) {
 export function classifyAiError(status, detail) {
   const providerDetail = extractProviderErrorDetail(detail)
   const lower = providerDetail.toLowerCase()
-  if (status === 401) return 'AI authentication failed (401) \u2014 check your API key'
-  if (status === 403) return 'AI access denied (403) \u2014 check your API key permissions'
-  if (status === 429) return 'AI rate limit reached (429) \u2014 try again in a moment'
-  if (status === 404) return `AI endpoint or model not found (404)${providerDetail ? ': ' + providerDetail : ''} \u2014 check your base URL and model name`
+  if (status === 401) return 'AI authentication failed (401) — check your API key'
+  if (status === 403) return 'AI access denied (403) — check your API key permissions'
+  if (status === 429) return 'AI rate limit reached (429) — try again in a moment'
+  if (status === 404) return `AI endpoint or model not found (404)${providerDetail ? ': ' + providerDetail : ''} — check your base URL and model name`
   if (status === 400) {
-    if (lower.includes('response_format') || lower.includes('json')) return `AI provider rejected JSON mode (400)${providerDetail ? ': ' + providerDetail : ''} \u2014 FlashForge will retry without JSON mode when possible`
-    if (lower.includes('model')) return `AI model not found or invalid${providerDetail ? ': ' + providerDetail : ''} \u2014 check your model name`
+    if (lower.includes('response_format') || lower.includes('json')) return `AI provider rejected JSON mode (400)${providerDetail ? ': ' + providerDetail : ''} — FlashForge will retry without JSON mode when possible`
+    if (lower.includes('model')) return `AI model not found or invalid${providerDetail ? ': ' + providerDetail : ''} — check your model name`
     return `AI bad request (400)${providerDetail ? ': ' + providerDetail : ''}`
   }
-  if (status >= 500) return `AI provider server error (${status}) \u2014 try again shortly`
+  if (status >= 500) return `AI provider server error (${status}) — try again shortly`
   return `AI provider failed (${status})${providerDetail ? ': ' + providerDetail : ''}`
 }
 
@@ -330,7 +428,6 @@ async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instru
     }
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS)
-    // Build a fresh request body each attempt (avoid cross-attempt mutation)
     const attemptBody = {
       model,
       temperature: prompt.temperature,
@@ -379,10 +476,29 @@ async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instru
       } catch {
         throw agentError('AI provider returned a non-JSON response', 'AI_PROVIDER_NON_JSON', 502, 'Check that the base URL points to an OpenAI-compatible chat completions API.')
       }
-      const content = data.choices?.[0]?.message?.content
-      if (!content) {
-        throw agentError('AI provider returned no message content', 'AI_EMPTY_RESPONSE', 502, 'Try a different model or check whether the provider supports chat completions.')
+
+      const extracted = extractAssistantText(data)
+      if (!extracted.ok) {
+        if (extracted.code === 'AI_EMPTY_RESPONSE' && includeJsonFormat && attempt < AI_MAX_RETRIES - 1) {
+          lastError = agentError(
+            extracted.message,
+            extracted.code,
+            502,
+            'FlashForge is retrying without JSON mode.',
+            extracted.safeDiagnostics ? JSON.stringify(extracted.safeDiagnostics) : undefined,
+          )
+          includeJsonFormat = false
+          continue
+        }
+        throw agentError(
+          extracted.message,
+          extracted.code,
+          502,
+          extracted.hint,
+          extracted.safeDiagnostics ? JSON.stringify(extracted.safeDiagnostics) : undefined,
+        )
       }
+      const content = extracted.text
 
       let parsed
       try {
@@ -390,7 +506,7 @@ async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instru
       } catch {
         if (attempt < AI_MAX_RETRIES - 1) {
           lastError = agentError('AI response was not valid JSON', 'AI_INVALID_JSON', 502, 'FlashForge is retrying without JSON mode.')
-          includeJsonFormat = false  // retry without response_format for non-supporting models
+          includeJsonFormat = false
           continue
         }
         throw agentError('AI response was not valid JSON', 'AI_INVALID_JSON', 502, 'Use a chat model with JSON support, or try a more capable OpenAI-compatible model.')
@@ -456,7 +572,6 @@ export default async function handler(req, res) {
   try {
     const body = await readBody(req)
 
-    // Support both compact fronts list (new) and full existingCards (legacy compatibility)
     let existingFronts = []
     if (Array.isArray(body.existingFronts)) {
       existingFronts = body.existingFronts.filter(Boolean).slice(0, MAX_EXISTING_FRONTS)
