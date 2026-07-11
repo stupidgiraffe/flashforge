@@ -32,12 +32,8 @@ function backupPayload(): CredentialBackupPayload {
     createdAt: '2026-07-11T00:00:00.000Z',
     ai: { apiKey: 'secret-ai', baseUrl: 'https://example.com/v1', model: 'model-1' },
     image: {
-      braveApiKey: 'brave',
-      pixabayApiKey: 'pixabay',
-      pexelsApiKey: 'pexels',
-      googleApiKey: 'google',
-      googleCx: 'cx',
-      provider: 'auto',
+      braveApiKey: 'brave', pixabayApiKey: 'pixabay', pexelsApiKey: 'pexels',
+      googleApiKey: 'google', googleCx: 'cx', provider: 'auto',
     },
     preferences: { ...DEFAULT_AGENT_DRAFT, instructions: 'Create routine cards' },
   }
@@ -54,6 +50,14 @@ describe('agent draft persistence', () => {
     expect(loadAgentDraft('set-1', storage)).toMatchObject({ instructions: 'Daily routines', count: '12', searchStyle: 'simple-illustration' })
     storage.setItem('flashforge_agent_draft:set-2', JSON.stringify({ count: '9999', mode: 'broken', side: 'elsewhere' }))
     expect(loadAgentDraft('set-2', storage)).toMatchObject({ count: '8', mode: 'enhance', side: 'both' })
+  })
+
+  it('rejects zero, negative, fractional, and over-limit card counts', () => {
+    const storage = memoryStorage()
+    for (const count of ['0', '-1', '1.5', '61', '9999']) {
+      storage.setItem('flashforge_agent_draft:set', JSON.stringify({ ...DEFAULT_AGENT_DRAFT, count }))
+      expect(loadAgentDraft('set', storage).count).toBe('8')
+    }
   })
 })
 
@@ -98,5 +102,18 @@ describe('encrypted credential backup', () => {
     const encrypted = await encryptCredentialBackup(backupPayload(), 'correct horse battery staple')
     await expect(decryptCredentialBackup(encrypted, 'incorrect passphrase')).rejects.toThrow(/Could not decrypt/)
     await expect(encryptCredentialBackup(backupPayload(), 'short')).rejects.toThrow(/at least 10/)
+  })
+
+  it('sanitizes an unsupported imported image provider', async () => {
+    const payload = backupPayload()
+    payload.image.provider = 'malicious-provider'
+    const encrypted = await encryptCredentialBackup(payload, 'correct horse battery staple')
+    const restored = await decryptCredentialBackup(encrypted, 'correct horse battery staple')
+    expect(restored.image.provider).toBe('auto')
+  })
+
+  it('rejects oversized and unsupported backup envelopes', async () => {
+    await expect(decryptCredentialBackup('x'.repeat(128 * 1024 + 1), 'correct horse battery staple')).rejects.toThrow(/too large/)
+    await expect(decryptCredentialBackup(JSON.stringify({ format: 'other', version: 1 }), 'correct horse battery staple')).rejects.toThrow(/not supported/)
   })
 })
