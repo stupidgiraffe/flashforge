@@ -18,11 +18,7 @@ export interface AgentDraftPreferences {
 export interface CredentialBackupPayload {
   version: 1
   createdAt: string
-  ai: {
-    apiKey: string
-    baseUrl: string
-    model: string
-  }
+  ai: { apiKey: string; baseUrl: string; model: string }
   image: {
     braveApiKey: string
     pixabayApiKey: string
@@ -37,31 +33,15 @@ export interface CredentialBackupPayload {
 interface EncryptedCredentialEnvelope {
   format: 'flashforge-encrypted-settings'
   version: 1
-  kdf: {
-    name: 'PBKDF2'
-    hash: 'SHA-256'
-    iterations: number
-    salt: string
-  }
-  cipher: {
-    name: 'AES-GCM'
-    iv: string
-    data: string
-  }
+  kdf: { name: 'PBKDF2'; hash: 'SHA-256'; iterations: number; salt: string }
+  cipher: { name: 'AES-GCM'; iv: string; data: string }
 }
 
 export const IMAGE_RISK_ACK_VERSION = '1'
 export const DEFAULT_AGENT_DRAFT: AgentDraftPreferences = {
-  instructions: '',
-  count: '8',
-  mode: 'enhance',
-  side: 'both',
-  generateText: true,
-  generateImages: true,
-  overwriteImages: false,
-  embedImages: true,
-  searchStyle: 'clear-photo',
-  customSearchTemplate: '{front}',
+  instructions: '', count: '8', mode: 'enhance', side: 'both', generateText: true,
+  generateImages: true, overwriteImages: false, embedImages: true,
+  searchStyle: 'clear-photo', customSearchTemplate: '{front}',
 }
 
 const IMAGE_RISK_KEY = 'flashforge_image_risk_ack_version'
@@ -69,11 +49,13 @@ const REMEMBER_KEY = 'flashforge_remember_byok_key'
 const DRAFT_PREFIX = 'flashforge_agent_draft:'
 const PBKDF2_ITERATIONS = 250_000
 const MAX_BACKUP_BYTES = 128 * 1024
+const IMAGE_PROVIDERS = new Set(['auto', 'brave', 'pixabay', 'pexels', 'google', 'openverse'])
+const SEARCH_STYLES: ImageSearchStyleId[] = ['clear-photo', 'simple-illustration', 'cute-character', 'classroom-clipart', 'plain-background', 'none', 'custom']
 
 function resolveStorage(storage?: Storage): Storage | null {
   if (storage) return storage
   if (typeof window === 'undefined') return null
-  return window.localStorage
+  try { return window.localStorage } catch { return null }
 }
 
 function safeGet(storage: Storage | null, key: string): string | null {
@@ -91,16 +73,21 @@ function safeRemove(storage: Storage | null, key: string): void {
   try { storage.removeItem(key) } catch { /* storage may be unavailable */ }
 }
 
+function sanitizeCount(value: unknown): string {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 60 ? String(parsed) : DEFAULT_AGENT_DRAFT.count
+}
+
 function sanitizeDraft(value: unknown): AgentDraftPreferences {
   const draft = value && typeof value === 'object' ? value as Partial<AgentDraftPreferences> : {}
   const mode = draft.mode === 'create' || draft.mode === 'enhance' ? draft.mode : DEFAULT_AGENT_DRAFT.mode
   const side = draft.side === 'front' || draft.side === 'back' || draft.side === 'both' ? draft.side : DEFAULT_AGENT_DRAFT.side
-  const searchStyle: ImageSearchStyleId = ['clear-photo', 'simple-illustration', 'cute-character', 'classroom-clipart', 'plain-background', 'none', 'custom'].includes(String(draft.searchStyle))
+  const searchStyle = SEARCH_STYLES.includes(draft.searchStyle as ImageSearchStyleId)
     ? draft.searchStyle as ImageSearchStyleId
     : DEFAULT_AGENT_DRAFT.searchStyle
   return {
     instructions: typeof draft.instructions === 'string' ? draft.instructions.slice(0, 4_000) : DEFAULT_AGENT_DRAFT.instructions,
-    count: /^\d{1,2}$/.test(String(draft.count ?? '')) ? String(draft.count) : DEFAULT_AGENT_DRAFT.count,
+    count: sanitizeCount(draft.count),
     mode,
     side,
     generateText: typeof draft.generateText === 'boolean' ? draft.generateText : DEFAULT_AGENT_DRAFT.generateText,
@@ -141,8 +128,9 @@ export function shouldRememberAiKey(storage?: Storage): boolean {
 }
 
 export function setRememberAiKey(remember: boolean, storage?: Storage): void {
-  safeSet(resolveStorage(storage), REMEMBER_KEY, String(remember))
-  if (!remember) safeRemove(resolveStorage(storage), 'flashforge_byok_key')
+  const target = resolveStorage(storage)
+  safeSet(target, REMEMBER_KEY, String(remember))
+  if (!remember) safeRemove(target, 'flashforge_byok_key')
 }
 
 export function persistAiKey(apiKey: string, remember: boolean, storage?: Storage): void {
@@ -153,14 +141,7 @@ export function persistAiKey(apiKey: string, remember: boolean, storage?: Storag
 
 export function clearStoredCredentials(storage?: Storage): void {
   const target = resolveStorage(storage)
-  for (const key of [
-    'flashforge_byok_key',
-    'flashforge_brave_key',
-    'flashforge_pixabay_key',
-    'flashforge_pexels_key',
-    'flashforge_google_image_key',
-    'flashforge_google_cx',
-  ]) safeRemove(target, key)
+  for (const key of ['flashforge_byok_key', 'flashforge_brave_key', 'flashforge_pixabay_key', 'flashforge_pexels_key', 'flashforge_google_image_key', 'flashforge_google_cx']) safeRemove(target, key)
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -179,17 +160,13 @@ function base64ToBytes(value: string): Uint8Array {
 async function deriveBackupKey(passphrase: string, salt: Uint8Array, iterations: number): Promise<CryptoKey> {
   const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey'])
   return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations },
-    material,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt'],
+    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, material,
+    { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'],
   )
 }
 
-function requirePassphrase(passphrase: string): string {
+function requirePassphrase(passphrase: string): void {
   if (passphrase.length < 10) throw new Error('Use a passphrase of at least 10 characters')
-  return passphrase
 }
 
 function sanitizeShortString(value: unknown, max = 2_000): string {
@@ -202,6 +179,7 @@ function sanitizeBackupPayload(value: unknown): CredentialBackupPayload {
   if (raw.version !== 1) throw new Error('Backup version is not supported')
   const ai = raw.ai && typeof raw.ai === 'object' ? raw.ai : {} as CredentialBackupPayload['ai']
   const image = raw.image && typeof raw.image === 'object' ? raw.image : {} as CredentialBackupPayload['image']
+  const provider = sanitizeShortString(image.provider, 100)
   return {
     version: 1,
     createdAt: sanitizeShortString(raw.createdAt, 100) || new Date().toISOString(),
@@ -216,7 +194,7 @@ function sanitizeBackupPayload(value: unknown): CredentialBackupPayload {
       pexelsApiKey: sanitizeShortString(image.pexelsApiKey),
       googleApiKey: sanitizeShortString(image.googleApiKey),
       googleCx: sanitizeShortString(image.googleCx, 500),
-      provider: sanitizeShortString(image.provider, 100) || 'auto',
+      provider: IMAGE_PROVIDERS.has(provider) ? provider : 'auto',
     },
     preferences: sanitizeDraft(raw.preferences),
   }
@@ -230,8 +208,7 @@ export async function encryptCredentialBackup(payload: CredentialBackupPayload, 
   const plaintext = new TextEncoder().encode(JSON.stringify(sanitizeBackupPayload(payload)))
   const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext))
   const envelope: EncryptedCredentialEnvelope = {
-    format: 'flashforge-encrypted-settings',
-    version: 1,
+    format: 'flashforge-encrypted-settings', version: 1,
     kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: PBKDF2_ITERATIONS, salt: bytesToBase64(salt) },
     cipher: { name: 'AES-GCM', iv: bytesToBase64(iv), data: bytesToBase64(encrypted) },
   }
