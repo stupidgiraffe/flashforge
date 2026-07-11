@@ -29,6 +29,10 @@ import { DEFAULT_IMAGE_PLACEMENT, getCardSideImage, imageAssetFromCandidate } fr
 import { AiModelPicker } from '@/components/AiModelPicker'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { combineAbortSignals } from '@/lib/abort-signals'
+import { CredentialBackupPanel } from '@/components/CredentialBackupPanel'
+import { DEFAULT_AGENT_DRAFT, acceptImageRisk, clearAgentDraft, clearStoredCredentials, hasAcceptedImageRisk, loadAgentDraft, persistAiKey, saveAgentDraft, setRememberAiKey, shouldRememberAiKey } from '@/lib/agent-preferences'
+import type { AgentDraftPreferences, CredentialBackupPayload, ImageSearchStyleId } from '@/lib/agent-preferences'
+import { IMAGE_SEARCH_STYLES, applyImageSearchStyle, getImageSearchTemplate, previewImageSearch } from '@/lib/image-search-styles'
 
 declare global {
   interface Window {
@@ -867,14 +871,17 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [imageSearchQuery, setImageSearchQuery] = useState('')
   const [imageSearchResults, setImageSearchResults] = useState<ImageCandidate[]>([])
   const [imageSearchLoading, setImageSearchLoading] = useState(false)
+  const initialAgentDraft = loadAgentDraft(set.id)
   const [imageAgentOpen, setImageAgentOpen] = useState(false)
-  const [flashcardAgentMode, setFlashcardAgentMode] = useState<FlashcardAgentMode>('enhance')
-  const [flashcardAgentInstructions, setFlashcardAgentInstructions] = useState('Create a complete funny, classroom-safe ESL deck. Use short front text, useful back text, and specific real web image search queries for each side.')
-  const [flashcardAgentCount, setFlashcardAgentCount] = useState('8')
-  const [flashcardAgentAiKey, setFlashcardAgentAiKey] = useState(() => localStorage.getItem('flashforge_byok_key') ?? '')
+  const [flashcardAgentMode, setFlashcardAgentMode] = useState<FlashcardAgentMode>(initialAgentDraft.mode)
+  const [flashcardAgentInstructions, setFlashcardAgentInstructions] = useState(initialAgentDraft.instructions)
+  const [flashcardAgentCount, setFlashcardAgentCount] = useState(initialAgentDraft.count)
+  const [rememberAiKeyOnDevice, setRememberAiKeyOnDevice] = useState(() => shouldRememberAiKey())
+  const [flashcardAgentAiKey, setFlashcardAgentAiKey] = useState(() => shouldRememberAiKey() ? localStorage.getItem('flashforge_byok_key') ?? '' : '')
   const [flashcardAgentBaseUrl, setFlashcardAgentBaseUrl] = useState(() => localStorage.getItem('flashforge_byok_base_url') ?? 'https://api.openai.com/v1')
   const [flashcardAgentModel, setFlashcardAgentModel] = useState(() => localStorage.getItem('flashforge_byok_model') ?? '')
-  const [flashcardAgentGenerateText, setFlashcardAgentGenerateText] = useState(true)
+  const [flashcardAgentGenerateText, setFlashcardAgentGenerateText] = useState(initialAgentDraft.generateText)
+  const [imageAgentGenerateImages, setImageAgentGenerateImages] = useState(initialAgentDraft.generateImages)
   const [selectedRevisionCardIds, setSelectedRevisionCardIds] = useState<string[]>([])
   const [revisionDialogOpen, setRevisionDialogOpen] = useState(false)
   const [revisionFeedback, setRevisionFeedback] = useState('')
@@ -886,11 +893,12 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [revisionScope, setRevisionScope] = useState<RevisionScope>('both')
   const [aiConnectionTestLoading, setAiConnectionTestLoading] = useState(false)
   const [compatibilityResults, setCompatibilityResults] = useState<CompatibilityResult[]>([])
-  const [imageAgentSide, setImageAgentSide] = useState<ImageAgentTargetSide>('both')
-  const [imageAgentQueryTemplate, setImageAgentQueryTemplate] = useState('{front} funny character clear image')
-  const [imageAgentEmbed, setImageAgentEmbed] = useState(true)
-  const [imageAgentOverwrite, setImageAgentOverwrite] = useState(false)
-  const [imageAgentAcceptedRisk, setImageAgentAcceptedRisk] = useState(false)
+  const [imageAgentSide, setImageAgentSide] = useState<ImageAgentTargetSide>(initialAgentDraft.side)
+  const [imageAgentSearchStyle, setImageAgentSearchStyle] = useState<ImageSearchStyleId>(initialAgentDraft.searchStyle)
+  const [imageAgentCustomTemplate, setImageAgentCustomTemplate] = useState(initialAgentDraft.customSearchTemplate)
+  const [imageAgentEmbed, setImageAgentEmbed] = useState(initialAgentDraft.embedImages)
+  const [imageAgentOverwrite, setImageAgentOverwrite] = useState(initialAgentDraft.overwriteImages)
+  const [imageAgentAcceptedRisk, setImageAgentAcceptedRisk] = useState(() => hasAcceptedImageRisk())
   const [imageAgentLoading, setImageAgentLoading] = useState(false)
   const [imageAgentJobState, setImageAgentJobState] = useState<AgentJobState>('idle')
   const [imageAgentLog, setImageAgentLog] = useState<string[]>([])
@@ -915,7 +923,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [previewContainerWidth, setPreviewContainerWidth] = useState(0)
   const previewObserverRef = useRef<ResizeObserver | null>(null)
 
-  useEffect(() => { localStorage.setItem('flashforge_byok_key', flashcardAgentAiKey) }, [flashcardAgentAiKey])
+  useEffect(() => {
+    setRememberAiKey(rememberAiKeyOnDevice)
+    persistAiKey(flashcardAgentAiKey, rememberAiKeyOnDevice)
+  }, [flashcardAgentAiKey, rememberAiKeyOnDevice])
   useEffect(() => { localStorage.setItem('flashforge_byok_base_url', flashcardAgentBaseUrl) }, [flashcardAgentBaseUrl])
   useEffect(() => { localStorage.setItem('flashforge_byok_model', flashcardAgentModel) }, [flashcardAgentModel])
   useEffect(() => { localStorage.setItem('flashforge_brave_key', imageBraveKey) }, [imageBraveKey])
@@ -924,6 +935,99 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   useEffect(() => { localStorage.setItem('flashforge_google_image_key', imageGoogleKey) }, [imageGoogleKey])
   useEffect(() => { localStorage.setItem('flashforge_google_cx', imageGoogleCx) }, [imageGoogleCx])
   useEffect(() => { localStorage.setItem('flashforge_image_provider', imageProvider) }, [imageProvider])
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      saveAgentDraft(set.id, {
+        instructions: flashcardAgentInstructions,
+        count: flashcardAgentCount,
+        mode: flashcardAgentMode === 'create' ? 'create' : 'enhance',
+        side: imageAgentSide,
+        generateText: flashcardAgentGenerateText,
+        generateImages: imageAgentGenerateImages,
+        overwriteImages: imageAgentOverwrite,
+        embedImages: imageAgentEmbed,
+        searchStyle: imageAgentSearchStyle,
+        customSearchTemplate: imageAgentCustomTemplate,
+      })
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [set.id, flashcardAgentInstructions, flashcardAgentCount, flashcardAgentMode, imageAgentSide, flashcardAgentGenerateText, imageAgentGenerateImages, imageAgentOverwrite, imageAgentEmbed, imageAgentSearchStyle, imageAgentCustomTemplate])
+
+  function currentAgentPreferences(): AgentDraftPreferences {
+    return {
+      instructions: flashcardAgentInstructions,
+      count: flashcardAgentCount,
+      mode: flashcardAgentMode === 'create' ? 'create' : 'enhance',
+      side: imageAgentSide,
+      generateText: flashcardAgentGenerateText,
+      generateImages: imageAgentGenerateImages,
+      overwriteImages: imageAgentOverwrite,
+      embedImages: imageAgentEmbed,
+      searchStyle: imageAgentSearchStyle,
+      customSearchTemplate: imageAgentCustomTemplate,
+    }
+  }
+
+  function applyAgentPreferences(preferences: AgentDraftPreferences) {
+    setFlashcardAgentInstructions(preferences.instructions)
+    setFlashcardAgentCount(preferences.count)
+    setFlashcardAgentMode(preferences.mode)
+    setImageAgentSide(preferences.side)
+    setFlashcardAgentGenerateText(preferences.generateText)
+    setImageAgentGenerateImages(preferences.generateImages)
+    setImageAgentOverwrite(preferences.overwriteImages)
+    setImageAgentEmbed(preferences.embedImages)
+    setImageAgentSearchStyle(preferences.searchStyle)
+    setImageAgentCustomTemplate(preferences.customSearchTemplate)
+  }
+
+  function resetAgentPreferences() {
+    clearAgentDraft(set.id)
+    applyAgentPreferences({ ...DEFAULT_AGENT_DRAFT })
+    toast.success('Agent preferences reset')
+  }
+
+  function buildCredentialBackupPayload(): CredentialBackupPayload {
+    return {
+      version: 1,
+      createdAt: new Date().toISOString(),
+      ai: { apiKey: flashcardAgentAiKey, baseUrl: flashcardAgentBaseUrl, model: flashcardAgentModel },
+      image: {
+        braveApiKey: imageBraveKey,
+        pixabayApiKey: imagePixabayKey,
+        pexelsApiKey: imagePexelsKey,
+        googleApiKey: imageGoogleKey,
+        googleCx: imageGoogleCx,
+        provider: imageProvider,
+      },
+      preferences: currentAgentPreferences(),
+    }
+  }
+
+  function importCredentialBackup(payload: CredentialBackupPayload) {
+    setRememberAiKeyOnDevice(true)
+    setFlashcardAgentAiKey(payload.ai.apiKey)
+    setFlashcardAgentBaseUrl(payload.ai.baseUrl || 'https://api.openai.com/v1')
+    setFlashcardAgentModel(payload.ai.model)
+    setImageBraveKey(payload.image.braveApiKey)
+    setImagePixabayKey(payload.image.pixabayApiKey)
+    setImagePexelsKey(payload.image.pexelsApiKey)
+    setImageGoogleKey(payload.image.googleApiKey)
+    setImageGoogleCx(payload.image.googleCx)
+    setImageProvider(payload.image.provider || 'auto')
+    applyAgentPreferences(payload.preferences)
+  }
+
+  function clearAgentCredentials() {
+    clearStoredCredentials()
+    setFlashcardAgentAiKey('')
+    setImageBraveKey('')
+    setImagePixabayKey('')
+    setImagePexelsKey('')
+    setImageGoogleKey('')
+    setImageGoogleCx('')
+    toast.success('Saved credentials cleared from this browser')
+  }
 
   const agentBusy = revisionLoading || imageAgentLoading || aiConnectionTestLoading
   useEffect(() => {
@@ -1475,11 +1579,12 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   }
 
 
-  function buildImageAgentQuery(card: FlashCard, side: ImageAgentTargetSide): string {
-    const front = card.frontText.trim()
-    const back = card.backText.trim()
+  function buildImageQuery(frontValue: string, backValue: string, side: ImageAgentTargetSide): string {
+    const front = frontValue.trim()
+    const back = backValue.trim()
     const primary = side === 'back' ? back || front : front || back
-    const query = imageAgentQueryTemplate
+    const template = getImageSearchTemplate(imageAgentSearchStyle, imageAgentCustomTemplate)
+    const query = template
       .split('{front}').join(front)
       .split('{back}').join(back)
       .split('{title}').join(set.title)
@@ -1487,7 +1592,15 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       .split('{text}').join(primary)
       .replace(/\s+/g, ' ')
       .trim()
-    return query || `${primary} ${set.title} clear classroom image`.trim()
+    return query || primary
+  }
+
+  function buildImageAgentQuery(card: FlashCard, side: ImageAgentTargetSide): string {
+    return buildImageQuery(card.frontText, card.backText, side)
+  }
+
+  function appendImageSearchToken(token: string) {
+    setImageAgentCustomTemplate((current) => `${current.trim()}${current.trim() ? ' ' : ''}${token}`)
   }
 
   function cardNeedsAgentImage(card: FlashCard): boolean {
@@ -1640,12 +1753,16 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
   async function runImageAgent() {
     if (imageAgentLoading) return
-    if (!imageAgentAcceptedRisk) {
-      toast.error('Please accept the image-use responsibility notice first')
+    const needsAi = flashcardAgentMode === 'create' || (flashcardAgentMode === 'enhance' && flashcardAgentGenerateText)
+    if (imageAgentGenerateImages && !imageAgentAcceptedRisk) {
+      toast.error('Please acknowledge the image-use notice once before searching for images')
+      return
+    }
+    if (!needsAi && !imageAgentGenerateImages) {
+      toast.error('Turn on text generation or image search before running the agent')
       return
     }
 
-    const needsAi = flashcardAgentMode === 'create' || (flashcardAgentMode === 'enhance' && flashcardAgentGenerateText)
     if (needsAi && (!flashcardAgentAiKey.trim() || !flashcardAgentModel.trim())) {
       toast.error('Enter your BYOK AI API key and model first, or turn off text generation for image-only enhancement')
       return
@@ -1753,7 +1870,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           setImageAgentLog((prev) => [...prev, `⚠ Generated ${generatedCards.length} of ${requestedCount}; the model returned fewer usable cards after retries.`])
         }
 
-        setImageAgentLog((prev) => [...prev, `✓ Generated ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'} — now searching for images...`])
+        setImageAgentLog((prev) => [...prev, `✓ Generated ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'}${imageAgentGenerateImages ? ' — now searching for images...' : ' — text saved.'}`])
 
         // Build the working copy from Phase 1 results
         if (flashcardAgentMode === 'create') {
@@ -1787,6 +1904,15 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         persistWorkingState()
       }
 
+      if (!imageAgentGenerateImages) {
+        setImageAgentSummary('Text generation complete. Image search was skipped.')
+        setImageAgentSummaryTone('success')
+        setImageAgentLog((prev) => ['✓ Text cards saved; image search disabled.', ...prev])
+        setImageAgentJobState('complete')
+        toast.success('Text cards saved')
+        return
+      }
+
       // ── Phase 2: Image search (client-orchestrated, bounded concurrency) ─
       interface ImageTask { cardId: string; side: 'front' | 'back'; intent: ReturnType<typeof buildImageSearchIntent> }
       const imageTasks: ImageTask[] = []
@@ -1800,7 +1926,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               side: 'front',
               frontText: card.frontText,
               backText: card.backText,
-              aiQuery: card.frontImageQuery,
+                  aiQuery: imageAgentSearchStyle === 'custom'
+                    ? buildImageQuery(card.frontText, card.backText, 'front')
+                    : applyImageSearchStyle(card.frontImageQuery || card.frontText, imageAgentSearchStyle),
             })
             if (intent.query) imageTasks.push({ cardId: card.id, side: 'front', intent })
           }
@@ -1809,7 +1937,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               side: 'back',
               frontText: card.frontText,
               backText: card.backText,
-              aiQuery: card.backImageQuery,
+                  aiQuery: imageAgentSearchStyle === 'custom'
+                    ? buildImageQuery(card.frontText, card.backText, 'back')
+                    : applyImageSearchStyle(card.backImageQuery || card.backText || card.frontText, imageAgentSearchStyle),
             })
             if (intent.query) imageTasks.push({ cardId: card.id, side: 'back', intent })
           }
@@ -2790,18 +2920,26 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
           </DialogHeader>
           <div className="space-y-5">
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
-              FlashForge can help find and attach images, but you choose what to use. You assume responsibility for copyright, likeness, classroom appropriateness, and any other image-use risks.
+              FlashForge searches third-party image providers. Review images before printing or publishing; you remain responsible for how they are used.
             </div>
 
-            <label className="flex items-start gap-3 text-sm">
-              <input
-                type="checkbox"
-                className="mt-1"
-                checked={imageAgentAcceptedRisk}
-                onChange={(event) => setImageAgentAcceptedRisk(event.target.checked)}
-              />
-              <span>I understand that I am responsible for the images I choose to search for, insert, print, share, or publish.</span>
-            </label>
+            {imageAgentGenerateImages && !imageAgentAcceptedRisk ? (
+              <label className="flex items-start gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={false}
+                  onChange={(event) => {
+                    if (!event.target.checked) return
+                    acceptImageRisk()
+                    setImageAgentAcceptedRisk(true)
+                  }}
+                />
+                <span>I understand — remember this acknowledgement on this device.</span>
+              </label>
+            ) : imageAgentGenerateImages ? (
+              <p className="text-xs text-muted-foreground">Image-use notice acknowledged on this device.</p>
+            ) : null}
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
@@ -2825,7 +2963,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
             <div className="space-y-2">
               <Label htmlFor="flashcard-agent-instructions">Agent instructions</Label>
-              <Textarea id="flashcard-agent-instructions" value={flashcardAgentInstructions} onChange={(event) => setFlashcardAgentInstructions(event.target.value)} rows={3} disabled={imageAgentLoading} />
+              <Textarea id="flashcard-agent-instructions" value={flashcardAgentInstructions} onChange={(event) => setFlashcardAgentInstructions(event.target.value)} placeholder="Example: Create 8 daily-routine cards for beginner Japanese elementary students. Use short English phrases and simple definitions." rows={3} disabled={imageAgentLoading} />
+              <p className="text-xs text-muted-foreground">Draft instructions are saved automatically for this deck.</p>
             </div>
 
             <div className="space-y-4">
@@ -2834,6 +2973,15 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 <Input id="flashcard-agent-ai-key" type="password" value={flashcardAgentAiKey} onChange={(event) => setFlashcardAgentAiKey(event.target.value)} placeholder="Required for full-deck AI generation; only sent to your chosen provider when you run the agent" disabled={imageAgentLoading} />
               </div>
               <AiModelPicker apiKey={flashcardAgentAiKey} baseUrl={flashcardAgentBaseUrl} model={flashcardAgentModel} disabled={imageAgentLoading || aiConnectionTestLoading} onBaseUrlChange={setFlashcardAgentBaseUrl} onModelChange={setFlashcardAgentModel} />
+              <CredentialBackupPanel
+                rememberAiKey={rememberAiKeyOnDevice}
+                hasSavedCredentials={Boolean(flashcardAgentAiKey || imageBraveKey || imagePixabayKey || imagePexelsKey || imageGoogleKey || imageGoogleCx)}
+                disabled={imageAgentLoading || aiConnectionTestLoading}
+                getBackupPayload={buildCredentialBackupPayload}
+                onRememberAiKeyChange={setRememberAiKeyOnDevice}
+                onImport={importCredentialBackup}
+                onClearCredentials={clearAgentCredentials}
+              />
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -2842,7 +2990,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 <Select value={imageAgentSide} onValueChange={(value) => {
                   if (!imageAgentLoading) setImageAgentSide(value as ImageAgentTargetSide)
                 }}>
-                  <SelectTrigger id="image-agent-side" disabled={imageAgentLoading}>
+                  <SelectTrigger id="image-agent-side" disabled={imageAgentLoading || !imageAgentGenerateImages}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -2856,15 +3004,19 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 <Label>Options</Label>
                 <div className="space-y-2 rounded-md border p-3 text-sm">
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={flashcardAgentGenerateText} disabled={imageAgentLoading} onChange={(event) => setFlashcardAgentGenerateText(event.target.checked)} />
+                    <input type="checkbox" checked={flashcardAgentGenerateText} disabled={imageAgentLoading || flashcardAgentMode === 'create'} onChange={(event) => setFlashcardAgentGenerateText(event.target.checked)} />
                     Let AI create/rewrite front and back text
                   </label>
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={imageAgentOverwrite} disabled={imageAgentLoading} onChange={(event) => setImageAgentOverwrite(event.target.checked)} />
+                    <input type="checkbox" checked={imageAgentGenerateImages} disabled={imageAgentLoading} onChange={(event) => setImageAgentGenerateImages(event.target.checked)} />
+                    Search for and attach images
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={imageAgentOverwrite} disabled={imageAgentLoading || !imageAgentGenerateImages} onChange={(event) => setImageAgentOverwrite(event.target.checked)} />
                     Overwrite existing images
                   </label>
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={imageAgentEmbed} disabled={imageAgentLoading} onChange={(event) => setImageAgentEmbed(event.target.checked)} />
+                    <input type="checkbox" checked={imageAgentEmbed} disabled={imageAgentLoading || !imageAgentGenerateImages} onChange={(event) => setImageAgentEmbed(event.target.checked)} />
                     Download/embed images when possible
                   </label>
                   <p className="text-xs text-muted-foreground">Agent-added images start centered with the existing crop controls set to neutral zoom/offset; you can still fine-tune each card manually.</p>
@@ -2872,19 +3024,32 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="image-agent-query">Search query template</Label>
-              <Input
-                id="image-agent-query"
-                value={imageAgentQueryTemplate}
-                onChange={(event) => setImageAgentQueryTemplate(event.target.value)}
-                placeholder="{front} funny character clear image"
-                disabled={imageAgentLoading}
-              />
-              <p className="text-xs text-muted-foreground">
-                Variables: {'{front}'}, {'{back}'}, {'{text}'}, {'{title}'}, {'{side}'}. Example: {'{front} funny character Japanese students recognize'}.
-              </p>
-            </div>
+            {imageAgentGenerateImages && (
+              <div className="space-y-3">
+                <Label htmlFor="image-agent-search-style">Image search style</Label>
+                <Select value={imageAgentSearchStyle} onValueChange={(value: ImageSearchStyleId) => setImageAgentSearchStyle(value)} disabled={imageAgentLoading}>
+                  <SelectTrigger id="image-agent-search-style"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {IMAGE_SEARCH_STYLES.map((style) => <SelectItem key={style.id} value={style.id}>{style.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">Example search: <span className="font-medium text-foreground">{previewImageSearch(imageAgentSearchStyle, imageAgentCustomTemplate)}</span></p>
+                {imageAgentSearchStyle === 'custom' && (
+                  <details className="rounded-md border p-3" open>
+                    <summary className="cursor-pointer text-sm font-medium">Advanced search template</summary>
+                    <div className="mt-3 space-y-3">
+                      <Input value={imageAgentCustomTemplate} onChange={(event) => setImageAgentCustomTemplate(event.target.value)} placeholder="{front} clear classroom image" disabled={imageAgentLoading} />
+                      <div className="flex flex-wrap gap-2">
+                        {['{front}', '{back}', '{text}', '{title}', '{side}'].map((token) => (
+                          <Button key={token} type="button" size="sm" variant="outline" onClick={() => appendImageSearchToken(token)} disabled={imageAgentLoading}>{token.replace(/[{}]/g, '')}</Button>
+                        ))}
+                      </div>
+                      <p className="text-xs text-muted-foreground">Use the buttons to insert card text, deck title, or card side. Most users can stay with a preset above.</p>
+                    </div>
+                  </details>
+                )}
+              </div>
+            )}
 
             <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={testAiConnection} disabled={aiConnectionTestLoading || imageAgentLoading}>
@@ -2896,6 +3061,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 <Gear className="mr-2" weight="bold" />
                 Image Search Settings
               </Button>
+              <Button variant="ghost" onClick={resetAgentPreferences} disabled={imageAgentLoading || aiConnectionTestLoading}>Reset agent preferences</Button>
               {imageAgentLoading ? (
                 <Button variant="destructive" disabled={imageAgentJobState === 'cancelling'} onClick={() => { setImageAgentJobState('cancelling'); imageAgentCancelRef.current?.() }}>
                   <X className="mr-2" weight="bold" />
@@ -2906,7 +3072,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                   Done
                 </Button>
               )}
-              <Button onClick={runImageAgent} disabled={imageAgentLoading || !imageAgentAcceptedRisk}>
+              <Button onClick={runImageAgent} disabled={imageAgentLoading || (imageAgentGenerateImages && !imageAgentAcceptedRisk)}>
                 <Sparkle className="mr-2" weight="bold" />
                 {imageAgentLoading ? 'Working...' : 'Run Flashcard Agent'}
               </Button>
