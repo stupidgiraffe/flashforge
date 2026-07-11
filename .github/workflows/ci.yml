@@ -28,7 +28,10 @@ jobs:
 
       - name: Apply guarded BYOK UX integration
         if: github.event_name == 'pull_request' && github.actor != 'github-actions[bot]'
-        run: python3 .github/scripts/apply_byok_ux.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 .github/scripts/apply_byok_ux.py 2>&1 | tee .github/scripts/integration-error.txt
 
       - name: Install dependencies
         run: npm ci
@@ -42,11 +45,20 @@ jobs:
       - name: Test
         run: npm run test
 
+      - name: Commit integration diagnostics
+        if: failure() && github.event_name == 'pull_request' && github.actor != 'github-actions[bot]'
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/scripts/integration-error.txt
+          git commit -m "chore: capture BYOK integration failure"
+          git push origin HEAD:${{ github.head_ref }}
+
       - name: Commit verified integration
-        if: github.event_name == 'pull_request' && github.actor != 'github-actions[bot]'
+        if: success() && github.event_name == 'pull_request' && github.actor != 'github-actions[bot]'
         run: |
           git checkout origin/main -- .github/workflows/ci.yml
-          rm .github/scripts/apply_byok_ux.py
+          rm .github/scripts/apply_byok_ux.py .github/scripts/integration-error.txt
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
