@@ -31,6 +31,14 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/apply_byok_ux.py')
+          content = path.read_text()
+          content = content.replace('"                  aiQuery: card.frontImageQuery,\\n",', '"              aiQuery: card.frontImageQuery,\\n",')
+          content = content.replace('"                  aiQuery: card.backImageQuery,\\n",', '"              aiQuery: card.backImageQuery,\\n",')
+          path.write_text(content)
+          PY
           python3 .github/scripts/apply_byok_ux.py 2>&1 | tee .github/scripts/integration-error.txt
 
       - name: Install dependencies
