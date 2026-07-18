@@ -1,4 +1,4 @@
-export type AiProvider = 'openai' | 'openrouter' | 'custom'
+export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'groq' | 'mistral' | 'together' | 'xai' | 'deepseek' | 'cerebras' | 'custom'
 
 export interface AiModelOption {
   id: string
@@ -16,29 +16,94 @@ interface CachedModels {
   models: AiModelOption[]
 }
 
-export const AI_PROVIDER_DEFAULTS: Record<AiProvider, { label: string; baseUrl: string; models: AiModelOption[] }> = {
+interface AiProviderDefinition {
+  label: string
+  baseUrl: string
+  models: AiModelOption[]
+  keyHelpUrl?: string
+  supportsModelDiscovery: boolean
+}
+
+function model(id: string, name: string, provider: AiProvider, structuredOutput = false): AiModelOption {
+  return { id, name, provider, ...(structuredOutput ? { structuredOutput: true } : {}) }
+}
+
+export const AI_PROVIDER_DEFAULTS: Record<AiProvider, AiProviderDefinition> = {
   openai: {
     label: 'OpenAI',
     baseUrl: 'https://api.openai.com/v1',
     models: [
-      { id: 'gpt-4.1-mini', name: 'GPT-4.1 mini', provider: 'openai', structuredOutput: true },
-      { id: 'gpt-4.1', name: 'GPT-4.1', provider: 'openai', structuredOutput: true },
-      { id: 'gpt-4o-mini', name: 'GPT-4o mini', provider: 'openai', structuredOutput: true },
+      model('gpt-4.1-mini', 'GPT-4.1 mini', 'openai', true),
+      model('gpt-4.1', 'GPT-4.1', 'openai', true),
+      model('gpt-4o-mini', 'GPT-4o mini', 'openai', true),
     ],
+    keyHelpUrl: 'https://platform.openai.com/api-keys',
+    supportsModelDiscovery: true,
   },
   openrouter: {
     label: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',
     models: [
-      { id: 'openai/gpt-4.1-mini', name: 'OpenAI: GPT-4.1 mini', provider: 'openrouter', structuredOutput: true },
-      { id: 'google/gemini-2.5-flash', name: 'Google: Gemini 2.5 Flash', provider: 'openrouter', structuredOutput: true },
-      { id: 'anthropic/claude-3.7-sonnet', name: 'Anthropic: Claude 3.7 Sonnet', provider: 'openrouter' },
+      model('openai/gpt-4.1-mini', 'OpenAI: GPT-4.1 mini', 'openrouter', true),
+      model('google/gemini-2.5-flash', 'Google: Gemini 2.5 Flash', 'openrouter', true),
     ],
+    keyHelpUrl: 'https://openrouter.ai/settings/keys',
+    supportsModelDiscovery: true,
+  },
+  gemini: {
+    label: 'Google Gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    models: [],
+    keyHelpUrl: 'https://aistudio.google.com/apikey',
+    supportsModelDiscovery: true,
+  },
+  groq: {
+    label: 'Groq',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    models: [],
+    keyHelpUrl: 'https://console.groq.com/keys',
+    supportsModelDiscovery: true,
+  },
+  mistral: {
+    label: 'Mistral AI',
+    baseUrl: 'https://api.mistral.ai/v1',
+    models: [],
+    keyHelpUrl: 'https://console.mistral.ai/api-keys',
+    supportsModelDiscovery: true,
+  },
+  together: {
+    label: 'Together AI',
+    baseUrl: 'https://api.together.xyz/v1',
+    models: [],
+    keyHelpUrl: 'https://api.together.ai/settings/api-keys',
+    supportsModelDiscovery: true,
+  },
+  xai: {
+    label: 'xAI',
+    baseUrl: 'https://api.x.ai/v1',
+    models: [],
+    keyHelpUrl: 'https://console.x.ai/',
+    supportsModelDiscovery: true,
+  },
+  deepseek: {
+    label: 'DeepSeek',
+    baseUrl: 'https://api.deepseek.com/v1',
+    models: [],
+    keyHelpUrl: 'https://platform.deepseek.com/api_keys',
+    supportsModelDiscovery: true,
+  },
+  cerebras: {
+    label: 'Cerebras',
+    baseUrl: 'https://api.cerebras.ai/v1',
+    models: [],
+    keyHelpUrl: 'https://cloud.cerebras.ai/',
+    supportsModelDiscovery: true,
   },
   custom: {
     label: 'Custom OpenAI-compatible',
     baseUrl: '',
     models: [],
+    supportsModelDiscovery: true,
   },
 }
 
@@ -67,6 +132,13 @@ export function writeCachedModels(provider: AiProvider, baseUrl: string, models:
 export function inferAiProvider(baseUrl: string): AiProvider {
   const value = baseUrl.toLowerCase()
   if (value.includes('openrouter.ai')) return 'openrouter'
+  if (value.includes('generativelanguage.googleapis.com')) return 'gemini'
+  if (value.includes('api.groq.com')) return 'groq'
+  if (value.includes('api.mistral.ai')) return 'mistral'
+  if (value.includes('api.together.xyz')) return 'together'
+  if (value.includes('api.x.ai')) return 'xai'
+  if (value.includes('api.deepseek.com')) return 'deepseek'
+  if (value.includes('api.cerebras.ai')) return 'cerebras'
   if (value.includes('api.openai.com')) return 'openai'
   return 'custom'
 }

@@ -1,4 +1,17 @@
-const PROVIDERS = new Set(['openai', 'openrouter', 'custom'])
+const PROVIDER_BASE_URLS = {
+  openai: 'https://api.openai.com/v1',
+  openrouter: 'https://openrouter.ai/api/v1',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  groq: 'https://api.groq.com/openai/v1',
+  mistral: 'https://api.mistral.ai/v1',
+  together: 'https://api.together.xyz/v1',
+  xai: 'https://api.x.ai/v1',
+  deepseek: 'https://api.deepseek.com/v1',
+  cerebras: 'https://api.cerebras.ai/v1',
+  custom: '',
+}
+
+const PROVIDERS = new Set(Object.keys(PROVIDER_BASE_URLS))
 
 function json(res, status, body) {
   res.statusCode = status
@@ -22,7 +35,7 @@ export function normalizeModelResults(rawModels, provider) {
       const completionPrice = Number(raw?.pricing?.completion)
       return {
         id,
-        name: String(raw?.name || id).trim(),
+        name: String(raw?.display_name || raw?.name || id).trim(),
         provider,
         ...(raw?.description ? { description: String(raw.description).slice(0, 300) } : {}),
         ...(Number.isFinite(Number(raw?.context_length)) ? { contextLength: Number(raw.context_length) } : {}),
@@ -36,8 +49,9 @@ export function normalizeModelResults(rawModels, provider) {
 }
 
 function normalizeBaseUrl(provider, rawBaseUrl) {
-  const fallback = provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : 'https://api.openai.com/v1'
+  const fallback = PROVIDER_BASE_URLS[provider] || ''
   const raw = String(rawBaseUrl || fallback).trim().replace(/\/$/, '')
+  if (!raw) throw new Error('Model discovery base URL is required')
   const url = new URL(raw)
   if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) throw new Error('Model discovery base URL must use HTTPS')
   return raw
@@ -65,7 +79,8 @@ export default async function handler(req, res) {
       })
     }
     const data = await response.json()
-    return json(res, 200, { provider, fetchedAt: Date.now(), models: normalizeModelResults(data?.data || data?.models, provider) })
+    const rawModels = data?.data || data?.models || data?.items
+    return json(res, 200, { provider, fetchedAt: Date.now(), models: normalizeModelResults(rawModels, provider) })
   } catch (error) {
     return json(res, 400, { error: error instanceof Error ? error.message : 'Model discovery failed', code: 'MODEL_DISCOVERY_FAILED', hint: 'Check the base URL, or enter a model id manually.' })
   }
