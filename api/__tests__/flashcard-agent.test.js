@@ -13,7 +13,7 @@ describe('module load', () => {
 // ---------------------------------------------------------------------------
 // Import helpers
 // ---------------------------------------------------------------------------
-import { extractJson, normalizeGeneratedCard, normalizeRevisedCard, normalizeCreateCount, normalizeRevisionPatches, normalizeRevisionPatchResult, extractProviderErrorDetail, classifyAiError, extractAssistantText } from '../flashcard-agent.js'
+import { extractJson, normalizeGeneratedCard, normalizeRevisedCard, normalizeCreateCount, normalizeRevisionPatches, normalizeRevisionPatchResult, extractProviderErrorDetail, classifyAiError, extractAssistantText, isContextLimitError } from '../flashcard-agent.js'
 
 // ---------------------------------------------------------------------------
 // extractJson
@@ -334,6 +334,20 @@ describe('classifyAiError', () => {
     expect(classifyAiError(400, '{"error":{"message":"The model does not exist"}}')).toMatch(/model/)
   })
 
+  it.each([
+    'context_length_exceeded',
+    'maximum context length is 256000 tokens',
+    'prompt too large',
+    'too many tokens',
+    'input exceeds context',
+    'request exceeds context window',
+  ])('maps context-limit variant before model-not-found logic: %s', (message) => {
+    const detail = JSON.stringify({ error: { message, code: message === 'context_length_exceeded' ? message : undefined } })
+    expect(isContextLimitError(detail)).toBe(true)
+    expect(classifyAiError(400, detail)).toMatch(/context window/)
+    expect(classifyAiError(400, detail)).not.toMatch(/model not found/)
+  })
+
   it('maps provider 404 to base URL/model guidance', () => {
     expect(classifyAiError(404, '{"error":{"message":"Not Found"}}')).toMatch(/base URL/)
   })
@@ -648,6 +662,39 @@ describe('handler', () => {
     )
     expect(res.statusCode).toBe(429)
     expect(JSON.parse(res.body)).toMatchObject({ code: 'AI_RATE_LIMIT' })
+  })
+
+  it('returns a safe AI_CONTEXT_LIMIT error without raw provider diagnostics', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: () => Promise.resolve(JSON.stringify({
+        error: {
+          message: 'Prompt too large: 2207970 tokens for a maximum context length of 256000',
+          code: 'context_length_exceeded',
+          private_request: 'do-not-return',
+        },
+      })),
+    })
+
+    const res = makeRes()
+    await handler(
+      makeReq({
+        aiApiKey: 'key',
+        aiModel: 'provider/model',
+        mode: 'revise',
+        instructions: 'Simplify',
+        revisionScope: 'text',
+        existingCards: [{ id: 'card-1', frontText: 'Front', backText: 'Back' }],
+      }),
+      res,
+    )
+    const body = JSON.parse(res.body)
+    expect(res.statusCode).toBe(400)
+    expect(body).toMatchObject({ code: 'AI_CONTEXT_LIMIT' })
+    expect(body.details).toBeUndefined()
+    expect(res.body).not.toContain('private_request')
+    expect(body.hint).toMatch(/small batches|shorten/)
   })
 
   it('retries and succeeds when first attempt returns malformed JSON (proves includeJsonFormat flip)', async () => {

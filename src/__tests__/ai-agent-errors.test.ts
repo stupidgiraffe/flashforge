@@ -38,6 +38,23 @@ describe('explainAiAgentError', () => {
     expect(explanation.action).toMatch(/fewer cards|shorter instructions|faster model/)
   })
 
+  it('maps AI_CONTEXT_LIMIT separately from model-not-found errors', () => {
+    const explanation = explainAiAgentError(
+      'AI request exceeds the model context window',
+      'AI_CONTEXT_LIMIT',
+    )
+    expect(explanation.title).toBe('Request exceeds model context')
+    expect(explanation.action).toMatch(/small batches|shorten|larger context/)
+    expect(explanation.title).not.toMatch(/model not available/i)
+  })
+
+  it('recognizes provider context-limit wording before fallback model heuristics', () => {
+    const explanation = explainAiAgentError(
+      'The prompt has too many tokens for this model maximum context length',
+    )
+    expect(explanation.title).toBe('Request exceeds model context')
+  })
+
   it('maps AI_ABORTED to a cancel-specific message', () => {
     const explanation = explainAiAgentError('The request was cancelled', 'AI_ABORTED')
     expect(explanation.title).toBe('AI request was cancelled')

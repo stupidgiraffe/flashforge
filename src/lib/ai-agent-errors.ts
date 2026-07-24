@@ -65,6 +65,14 @@ export function explainAiAgentError(message: string, code?: string, hint?: strin
     }
   }
 
+  if (normalizedCode === 'AI_CONTEXT_LIMIT') {
+    return {
+      title: 'Request exceeds model context',
+      detail: raw || 'The selected model cannot accept this revision batch within its context window.',
+      action: hint || 'Continue with automatic small batches, shorten the revision feedback, or choose a model with a larger context window.',
+    }
+  }
+
   if (normalizedCode === 'AI_TIMEOUT' || normalizedCode === 'AI_ABORTED') {
     return {
       title: normalizedCode === 'AI_TIMEOUT' ? 'AI request timed out' : 'AI request was cancelled',
@@ -180,6 +188,21 @@ export function explainAiAgentError(message: string, code?: string, hint?: strin
       title: 'AI access denied',
       detail: raw || 'The provider refused this request.',
       action: 'Check model permissions, billing, organization/project settings, or provider access rules.',
+    }
+  }
+
+  if (
+    lower.includes('context_length_exceeded')
+    || lower.includes('maximum context length')
+    || lower.includes('prompt too large')
+    || lower.includes('too many tokens')
+    || lower.includes('input exceeds context')
+    || lower.includes('request exceeds context window')
+  ) {
+    return {
+      title: 'Request exceeds model context',
+      detail: 'The selected model cannot accept this request within its context window.',
+      action: 'Continue with automatic small batches, shorten the revision feedback, or choose a model with a larger context window.',
     }
   }
 

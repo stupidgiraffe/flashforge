@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Printer, DownloadSimple, UploadSimple, Exam, Image as ImageIcon, Trash, ArrowLeft, DotsThreeVertical, Copy, Sparkle, Stack, CloudArrowUp, CloudArrowDown, LinkSimple, MagnifyingGlass, X, Gear, CheckCircle } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -21,8 +22,10 @@ import { FlashCardDisplay } from '@/components/FlashCardDisplay'
 import { ImagePlacementEditor } from '@/components/ImagePlacementEditor'
 import { generateTestQuestions } from '@/lib/test-utils'
 import { calculatePrintLayout, paginateCardsFixedLength, calculateBackPagePositions } from '@/lib/print-utils'
-import { applyRevisionPatches, getPatchChanges, validateRevisionPatches } from '@/lib/flashcard-revision'
+import { applyRevisionPatches, getPatchChanges } from '@/lib/flashcard-revision'
 import type { RevisionPatchOperation, RevisionScope } from '@/lib/flashcard-revision'
+import { buildRevisionRequestPayload, clearRevisionJob, createRevisionJob, getNextRevisionBatch, loadRevisionJob, markRevisionJob, mergeRevisionBatch, persistRevisionJob, revalidateRevisionJobForApply } from '@/lib/revision-job'
+import type { RevisionJob } from '@/lib/revision-job'
 import { explainAiAgentError, formatAiAgentError } from '@/lib/ai-agent-errors'
 import { buildImageSearchIntent, getImageAgentOutcome, getImageReviewCandidateUpdates, getStoredImageCandidates } from '@/lib/image-agent'
 import { DEFAULT_IMAGE_PLACEMENT, getCardSideImage, imageAssetFromCandidate } from '@/lib/image-placement'
@@ -791,7 +794,7 @@ interface ImageSearchWarning {
 
 type ImageAgentTargetSide = 'front' | 'back' | 'both'
 type FlashcardAgentMode = 'create' | 'enhance' | 'revise'
-type AgentJobState = 'idle' | 'running' | 'cancelling' | 'saving' | 'failed' | 'complete'
+type AgentJobState = 'idle' | 'running' | 'cancelling' | 'saving' | 'failed' | 'partial' | 'cancelled' | 'complete'
 type CompatibilityMode = 'create' | 'enhance' | 'revise'
 
 interface CompatibilityResult {
@@ -885,12 +888,16 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [selectedRevisionCardIds, setSelectedRevisionCardIds] = useState<string[]>([])
   const [revisionDialogOpen, setRevisionDialogOpen] = useState(false)
   const [revisionFeedback, setRevisionFeedback] = useState('')
-  const [revisionPreview, setRevisionPreview] = useState<RevisionPatchOperation[] | null>(null)
+  const [revisionJob, setRevisionJob] = useState<RevisionJob | null>(null)
   const [revisionLoading, setRevisionLoading] = useState(false)
   const [revisionJobState, setRevisionJobState] = useState<AgentJobState>('idle')
   const [revisionError, setRevisionError] = useState<string | null>(null)
   const [revisionTechnicalDetails, setRevisionTechnicalDetails] = useState<string | null>(null)
   const [revisionScope, setRevisionScope] = useState<RevisionScope>('both')
+  const [revisionCurrentRange, setRevisionCurrentRange] = useState<{ start: number; end: number } | null>(null)
+  const [revisionStatusMessage, setRevisionStatusMessage] = useState('Ready to revise selected cards.')
+  const [revisionPreviewOpen, setRevisionPreviewOpen] = useState(false)
+  const [revisionDiscardOpen, setRevisionDiscardOpen] = useState(false)
   const [aiConnectionTestLoading, setAiConnectionTestLoading] = useState(false)
   const [compatibilityResults, setCompatibilityResults] = useState<CompatibilityResult[]>([])
   const [imageAgentSide, setImageAgentSide] = useState<ImageAgentTargetSide>(initialAgentDraft.side)
@@ -935,6 +942,18 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   useEffect(() => { localStorage.setItem('flashforge_google_image_key', imageGoogleKey) }, [imageGoogleKey])
   useEffect(() => { localStorage.setItem('flashforge_google_cx', imageGoogleCx) }, [imageGoogleCx])
   useEffect(() => { localStorage.setItem('flashforge_image_provider', imageProvider) }, [imageProvider])
+  useEffect(() => {
+    const restored = loadRevisionJob(localStorage, set.id, set.cards)
+    setRevisionJob(restored)
+    if (!restored) return
+    setSelectedRevisionCardIds(restored.selectedCardIds)
+    setRevisionFeedback(restored.feedback)
+    setRevisionScope(restored.scope)
+    setRevisionJobState(restored.status)
+    setRevisionStatusMessage(restored.pendingCardIds.length > 0
+      ? `Saved revision has ${restored.pendingCardIds.length} card${restored.pendingCardIds.length === 1 ? '' : 's'} remaining.`
+      : 'Saved revision is ready to review and apply.')
+  }, [set.id, set.cards])
   useEffect(() => {
     const timer = window.setTimeout(() => {
       saveAgentDraft(set.id, {
@@ -1130,23 +1149,34 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       if (checked) return prev.includes(id) ? prev : [...prev, id]
       return prev.filter((cardId) => cardId !== id)
     })
-    setRevisionPreview(null)
     setRevisionError(null)
   }
 
   function selectAllRevisionCards() {
     setSelectedRevisionCardIds(set.cards.map((card) => card.id))
-    setRevisionPreview(null)
     setRevisionError(null)
   }
 
   function clearRevisionSelection() {
     setSelectedRevisionCardIds([])
-    setRevisionPreview(null)
     setRevisionError(null)
   }
 
   function openRevisionDialog(target: 'selected' | 'all' = 'selected') {
+    const restored = loadRevisionJob(localStorage, set.id, set.cards)
+    if (restored) {
+      setRevisionJob(restored)
+      setSelectedRevisionCardIds(restored.selectedCardIds)
+      setRevisionFeedback(restored.feedback)
+      setRevisionScope(restored.scope)
+      setRevisionJobState(restored.status)
+      setRevisionStatusMessage(restored.pendingCardIds.length > 0
+        ? `Saved revision has ${restored.pendingCardIds.length} card${restored.pendingCardIds.length === 1 ? '' : 's'} remaining.`
+        : 'Saved revision is ready to review and apply.')
+      setRevisionDialogOpen(true)
+      setRevisionError(null)
+      return
+    }
     const targetIds = target === 'all' ? set.cards.map((card) => card.id) : selectedRevisionCardIds
     if (targetIds.length === 0) {
       toast.error('Select one or more cards to revise')
@@ -1154,6 +1184,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     }
     setSelectedRevisionCardIds(targetIds)
     setFlashcardAgentMode('revise')
+    setRevisionJob(null)
+    setRevisionJobState('idle')
+    setRevisionStatusMessage('Ready to revise selected cards.')
+    setRevisionPreviewOpen(false)
     setRevisionDialogOpen(true)
     setRevisionError(null)
   }
@@ -1265,13 +1299,32 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
   async function runRevisionAgent() {
     if (revisionLoading) return
-    const selectedCards = set.cards.filter((card) => selectedRevisionCardIds.includes(card.id))
-    if (selectedCards.length === 0) {
-      toast.error('Select one or more cards to revise')
+    let activeJob = revisionJob
+    if (!activeJob) {
+      const selectedCards = set.cards.filter((card) => selectedRevisionCardIds.includes(card.id))
+      if (selectedCards.length === 0) {
+        toast.error('Select one or more cards to revise')
+        return
+      }
+      if (!revisionFeedback.trim()) {
+        toast.error('Enter revision feedback first')
+        return
+      }
+      activeJob = createRevisionJob(
+        set.id,
+        selectedRevisionCardIds,
+        revisionFeedback,
+        revisionScope,
+        Date.now(),
+        set.cards,
+      )
+    }
+    if (activeJob.pendingCardIds.length === 0) {
+      toast.message('All selected cards are already revised', { description: 'Review or apply the completed preview.' })
       return
     }
-    if (!revisionFeedback.trim()) {
-      toast.error('Enter revision feedback first')
+    if (activeJob.selectedCardIds.length === 0) {
+      toast.error('Select one or more cards to revise')
       return
     }
     if (!flashcardAgentAiKey.trim() || !flashcardAgentModel.trim()) {
@@ -1279,94 +1332,165 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       return
     }
 
-    const controller = new AbortController()
-    revisionCancelRef.current = controller
     revisionCancelledRef.current = false
-    const timer = setTimeout(() => controller.abort(), 55_000)
+    activeJob = markRevisionJob(activeJob, 'running')
+    persistRevisionJob(localStorage, activeJob)
+    setRevisionJob(activeJob)
+    setSelectedRevisionCardIds(activeJob.selectedCardIds)
+    setRevisionFeedback(activeJob.feedback)
+    setRevisionScope(activeJob.scope)
+    let failedBatchSize = 0
     try {
       setRevisionLoading(true)
       setRevisionJobState('running')
       setRevisionError(null)
       setRevisionTechnicalDetails(null)
-      const response = await fetch('/api/flashcard-agent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          mode: 'revise',
-          title: set.title,
-          instructions: revisionFeedback,
-          revisionScope,
-          existingCards: selectedCards.map((card) => ({
-            id: card.id,
-            frontText: card.frontText,
-            backText: card.backText,
-            frontImageUrl: card.frontImage?.originalUrl || card.frontImageUrl,
-            backImageUrl: card.backImage?.originalUrl || card.backImageUrl,
-          })),
-          aiApiKey: flashcardAgentAiKey.trim(),
-          aiBaseUrl: flashcardAgentBaseUrl.trim(),
-          aiModel: flashcardAgentModel.trim(),
-        }),
-      })
-      clearTimeout(timer)
-      const data = await response.json().catch(() => ({ error: 'Flashcard revision failed' })) as {
-        patches?: RevisionPatchOperation[]
-        rejected?: Array<{ cardId?: string; field?: string; reason?: string }>
-        noChanges?: boolean
-      } & AiAgentErrorBody
-      if (!response.ok) {
-        throw createAiAgentRequestError(response, data, 'Flashcard revision failed')
+      setRevisionPreviewOpen(false)
+
+      while (activeJob.pendingCardIds.length > 0) {
+        if (revisionCancelledRef.current) throw new DOMException('Revision cancelled', 'AbortError')
+        const batchCardIds = getNextRevisionBatch(activeJob)
+        failedBatchSize = batchCardIds.length
+        const start = activeJob.processedCardIds.length + 1
+        const end = start + batchCardIds.length - 1
+        setRevisionCurrentRange({ start, end })
+        setRevisionStatusMessage(`Revising cards ${start}-${end} of ${activeJob.selectedCardIds.length}.`)
+
+        const controller = new AbortController()
+        revisionCancelRef.current = controller
+        const timer = window.setTimeout(() => controller.abort(), 55_000)
+        try {
+          const response = await fetch('/api/flashcard-agent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify(buildRevisionRequestPayload(
+              activeJob,
+              set.cards,
+              batchCardIds,
+              {
+                apiKey: flashcardAgentAiKey,
+                baseUrl: flashcardAgentBaseUrl,
+                model: flashcardAgentModel,
+              },
+            )),
+          })
+          const data = await response.json().catch(() => ({ error: 'Flashcard revision failed' })) as {
+            patches?: RevisionPatchOperation[]
+            rejected?: Array<{ cardId?: string; field?: string; reason?: string }>
+          } & AiAgentErrorBody
+          if (!response.ok) throw createAiAgentRequestError(response, data, 'Flashcard revision failed')
+          if (revisionCancelledRef.current) throw new DOMException('Revision cancelled', 'AbortError')
+
+          activeJob = mergeRevisionBatch(
+            activeJob,
+            batchCardIds,
+            data.patches ?? [],
+            data.rejected?.length ?? 0,
+          )
+          const persisted = persistRevisionJob(localStorage, activeJob)
+          setRevisionJob(activeJob)
+          setRevisionJobState(activeJob.status)
+          setRevisionStatusMessage(activeJob.pendingCardIds.length > 0
+            ? `${activeJob.processedCardIds.length} of ${activeJob.selectedCardIds.length} cards complete.`
+            : 'Revision complete. Review the proposed changes before applying.')
+          if (!persisted) {
+            setRevisionError('Progress is available in this tab, but this browser could not save it for recovery.')
+          }
+        } finally {
+          window.clearTimeout(timer)
+          if (revisionCancelRef.current === controller) revisionCancelRef.current = null
+        }
       }
 
-      const selectedIds = new Set(selectedCards.map((card) => card.id))
-      const { validPatches, rejected } = validateRevisionPatches(data.patches ?? [], selectedIds, revisionScope)
-      const rejectedCount = rejected.length + (data.rejected?.length ?? 0)
-      if (validPatches.length === 0) {
-        setRevisionPreview([])
-        setRevisionJobState('complete')
-        setRevisionError(data.noChanges
-          ? 'No changes suggested. The current cards already match the request.'
-          : 'No safe changes were returned. Your deck was left unchanged.')
-        if (rejectedCount > 0) setRevisionTechnicalDetails(`${rejectedCount} operation${rejectedCount === 1 ? '' : 's'} rejected as invalid, unknown, duplicate, or outside the selected scope.`)
+      setRevisionJobState('complete')
+      setRevisionCurrentRange(null)
+      setRevisionPreviewOpen(activeJob.previewPatches.length > 0)
+      if (activeJob.previewPatches.length === 0) {
+        setRevisionError('No safe changes were suggested. The current deck remains unchanged.')
         toast.message('No changes suggested')
+      } else {
+        toast.success('Revision preview ready')
+      }
+    } catch (error) {
+      const wasCancelled = (error as Error).name === 'AbortError' && revisionCancelledRef.current
+      activeJob = markRevisionJob(activeJob, wasCancelled ? 'cancelled' : 'failed')
+      persistRevisionJob(localStorage, activeJob)
+      setRevisionJob(activeJob)
+      setRevisionJobState(wasCancelled ? 'cancelled' : 'failed')
+      setRevisionCurrentRange(null)
+      if (wasCancelled) {
+        setRevisionStatusMessage(`Cancelled with ${activeJob.processedCardIds.length} of ${activeJob.selectedCardIds.length} cards saved.`)
+        setRevisionError('Revision cancelled. Completed batches and preview changes are saved.')
+        toast.message('Revision cancelled; completed work was saved')
         return
       }
-      setRevisionPreview(validPatches)
-      setRevisionJobState('complete')
-      if (rejectedCount > 0) {
-        setRevisionError(`Preview ready with ${rejectedCount} rejected operation${rejectedCount === 1 ? '' : 's'}. Valid text changes were preserved.`)
-        setRevisionTechnicalDetails(JSON.stringify(data.rejected ?? rejected, null, 2))
-      }
-      toast.success('Revision preview ready')
-    } catch (error) {
-      const msg = (error as Error).name === 'AbortError'
-        ? revisionCancelledRef.current ? 'Revision cancelled; the deck was left unchanged' : 'Revision timed out - try fewer cards or shorter feedback'
+
+      const isTimeout = (error as Error).name === 'AbortError'
+      const msg = isTimeout
+        ? 'Revision batch timed out'
         : error instanceof Error ? error.message : 'Flashcard revision failed'
       const requestError = error as AiAgentRequestError
-      const explanation = explainAiAgentError(msg, requestError.code, requestError.hint)
-      setRevisionError(`${explanation.title}: ${explanation.detail} ${explanation.action}`)
-      setRevisionTechnicalDetails([`Mode: revise`, `Scope: ${revisionScope}`, `Cards: ${selectedCards.length}`, `Model: ${flashcardAgentModel.trim()}`, `Base host: ${safeUrlHost(flashcardAgentBaseUrl)}`, requestError.code ? `Code: ${requestError.code}` : '', requestError.details ? `Provider detail: ${requestError.details}` : ''].filter(Boolean).join('\n'))
-      setRevisionJobState((error as Error).name === 'AbortError' ? 'complete' : 'failed')
+      const explanation = explainAiAgentError(
+        msg,
+        isTimeout ? 'AI_TIMEOUT' : requestError.code,
+        requestError.hint,
+      )
+      setRevisionStatusMessage(`Stopped after ${activeJob.processedCardIds.length} of ${activeJob.selectedCardIds.length} cards. Completed work is saved.`)
+      setRevisionError(`${explanation.title}: ${explanation.detail} Failed batch: ${failedBatchSize} card${failedBatchSize === 1 ? '' : 's'}. ${explanation.action}`)
+      setRevisionTechnicalDetails([
+        'Mode: revise',
+        `Scope: ${activeJob.scope}`,
+        `Completed: ${activeJob.processedCardIds.length}/${activeJob.selectedCardIds.length}`,
+        `Failed batch: ${failedBatchSize}`,
+        `Model: ${flashcardAgentModel.trim()}`,
+        `Base host: ${safeUrlHost(flashcardAgentBaseUrl)}`,
+        requestError.code ? `Code: ${requestError.code}` : '',
+      ].filter(Boolean).join('\n'))
       toast.error(explanation.title, { description: explanation.action })
     } finally {
-      clearTimeout(timer)
       revisionCancelRef.current = null
       revisionCancelledRef.current = false
       setRevisionLoading(false)
     }
   }
 
+  function cancelRevisionAndKeepProgress() {
+    revisionCancelledRef.current = true
+    setRevisionJobState('cancelling')
+    setRevisionStatusMessage('Cancelling after the current request. Completed batches will remain saved.')
+    revisionCancelRef.current?.abort()
+  }
+
+  function discardSavedRevision() {
+    clearRevisionJob(localStorage, set.id)
+    setRevisionJob(null)
+    setRevisionJobState('idle')
+    setRevisionCurrentRange(null)
+    setRevisionPreviewOpen(false)
+    setRevisionError(null)
+    setRevisionTechnicalDetails(null)
+    setRevisionStatusMessage('Ready to revise selected cards.')
+    setRevisionDiscardOpen(false)
+    toast.success('Saved revision discarded')
+  }
+
   async function applyRevisionPreview() {
-    if (!revisionPreview || revisionLoading) return
-    const preview = revisionPreview
-    const selectedIds = new Set(selectedRevisionCardIds)
+    if (!revisionJob || revisionLoading) return
+    const applicableJob = revalidateRevisionJobForApply(revisionJob, set.cards)
+    if (!applicableJob || applicableJob.previewPatches.length === 0) {
+      setRevisionError('No safe completed changes remain to apply. Cards edited or removed since preview were skipped.')
+      return
+    }
+    const preview = applicableJob.previewPatches
+    const selectedIds = new Set(applicableJob.selectedCardIds)
     let workingCards = applyRevisionPatches(set.cards, preview, selectedIds)
     const imagePatches = preview.filter((patch) => patch.field === 'frontImageQuery' || patch.field === 'backImageQuery')
 
     try {
       setRevisionLoading(true)
       setRevisionJobState('saving')
+      setRevisionStatusMessage('Applying completed changes to the current deck.')
       let imagesApplied = 0
       let imagesNeedReview = 0
       let imagesFailed = 0
@@ -1414,7 +1538,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       }
 
       updateSet((prev) => ({ ...prev, cards: workingCards }))
-      setRevisionPreview(null)
+      clearRevisionJob(localStorage, set.id)
+      setRevisionJob(null)
       setRevisionDialogOpen(false)
       if (imagesNeedReview > 0) {
         toast.message('Revision applied; image options need review', {
@@ -1428,6 +1553,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         toast.success('Revision applied')
       }
       setRevisionJobState('complete')
+      setRevisionStatusMessage('Revision applied.')
     } finally {
       setRevisionLoading(false)
     }
@@ -2182,7 +2308,22 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     set.printSettings.orientation
   )
   const pages = paginateCardsFixedLength(set.cards, set.printSettings.cardsPerPage)
-  const selectedRevisionCards = set.cards.filter((card) => selectedRevisionCardIds.includes(card.id))
+  const revisionPreview = revisionJob?.previewPatches ?? null
+  const revisionTargetIds = revisionJob?.selectedCardIds ?? selectedRevisionCardIds
+  const selectedRevisionCards = set.cards.filter((card) => revisionTargetIds.includes(card.id))
+  const revisionProcessedCount = revisionJob?.processedCardIds.length ?? 0
+  const revisionTotalCount = revisionJob?.selectedCardIds.length ?? selectedRevisionCardIds.length
+  const revisionProgress = revisionTotalCount > 0 ? (revisionProcessedCount / revisionTotalCount) * 100 : 0
+  const revisionHasPending = (revisionJob?.pendingCardIds.length ?? 0) > 0
+  const revisionHasPreview = (revisionJob?.previewPatches.length ?? 0) > 0
+  const revisionStatusLabel = revisionJobState === 'running' ? 'Running'
+    : revisionJobState === 'cancelling' ? 'Cancelling'
+      : revisionJobState === 'saving' ? 'Applying'
+        : revisionJobState === 'partial' ? 'Partially complete'
+          : revisionJobState === 'cancelled' ? 'Cancelled - progress saved'
+            : revisionJobState === 'failed' ? 'Needs attention'
+              : revisionJobState === 'complete' ? 'Complete'
+                : 'Ready'
 
   return (
       <div className="space-y-8">
@@ -2754,19 +2895,60 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         if ((revisionLoading || aiConnectionTestLoading) && !open) return
         setRevisionDialogOpen(open)
       }}>
-        <DialogContent className="sm:max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Revise current deck with AI</DialogTitle>
+        <DialogContent className="grid h-[min(56rem,calc(100dvh-1rem))] max-h-[calc(100dvh-1rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-3xl">
+          <DialogHeader className="sticky top-0 z-10 border-b bg-background px-4 py-4 pr-12 text-left sm:px-6">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <DialogTitle>Revise current deck with AI</DialogTitle>
+              <span className="rounded border border-border bg-muted px-2 py-1 text-xs font-medium text-foreground">
+                {revisionStatusLabel}
+              </span>
+            </div>
             <DialogDescription>
-              Review the proposed changes before applying them to the selected cards.
+              Review proposed changes before applying them to the selected cards.
             </DialogDescription>
+            <div className="space-y-2 pt-1" role="status" aria-live="polite" aria-atomic="true">
+              <div className="flex flex-wrap justify-between gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                <span>{revisionCurrentRange
+                  ? `Cards ${revisionCurrentRange.start}-${revisionCurrentRange.end}`
+                  : `${revisionProcessedCount} of ${revisionTotalCount} processed`}</span>
+                <span>{revisionJob?.previewPatches.length ?? 0} valid changes · {revisionJob?.rejectedOperationCount ?? 0} rejected</span>
+              </div>
+              <Progress value={revisionProgress} aria-label={`${revisionProcessedCount} of ${revisionTotalCount} cards processed`} />
+              <p className="text-xs text-muted-foreground">{revisionStatusMessage}</p>
+            </div>
           </DialogHeader>
 
-          <div className="space-y-5">
+          <div className="min-h-0 space-y-5 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6">
             <div className="rounded-md border p-3 text-sm">
               <p className="font-medium">{selectedRevisionCards.length} selected card{selectedRevisionCards.length === 1 ? '' : 's'}</p>
               <p className="text-muted-foreground">Unselected cards will not be changed.</p>
             </div>
+
+            {revisionJob && (
+              <div className="space-y-3 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm">
+                <div>
+                  <p className="font-medium">Saved revision available</p>
+                  <p className="text-muted-foreground">
+                    {revisionHasPending
+                      ? `${revisionJob.pendingCardIds.length} card${revisionJob.pendingCardIds.length === 1 ? '' : 's'} remain. Continue from the next unfinished card.`
+                      : 'All selected cards were processed. Review or apply the completed work.'}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {revisionHasPending && !revisionLoading && (
+                    <Button type="button" size="sm" onClick={runRevisionAgent}>Continue revision</Button>
+                  )}
+                  {revisionHasPreview && (
+                    <Button type="button" size="sm" variant="outline" onClick={() => setRevisionPreviewOpen((open) => !open)}>
+                      {revisionPreviewOpen ? 'Hide completed work' : 'Review completed work'}
+                    </Button>
+                  )}
+                  <Button type="button" size="sm" variant="outline" onClick={() => setRevisionDiscardOpen(true)} disabled={revisionLoading}>
+                    Discard saved revision
+                  </Button>
+                </div>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label htmlFor="revision-feedback">Revision feedback</Label>
@@ -2776,8 +2958,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 onChange={(event) => setRevisionFeedback(event.target.value)}
                 rows={4}
                 placeholder="Replace irrelevant images and use wider framing. Make answers shorter. Revise only the selected cards."
-                disabled={revisionLoading}
+                disabled={revisionLoading || !!revisionJob}
               />
+              {revisionJob && <p className="text-xs text-muted-foreground">Discard the saved revision to change its instructions or scope.</p>}
             </div>
 
             <div className="space-y-2">
@@ -2794,10 +2977,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                     size="sm"
                     variant={revisionScope === value ? 'default' : 'ghost'}
                     aria-pressed={revisionScope === value}
-                    disabled={revisionLoading}
+                    disabled={revisionLoading || !!revisionJob}
                     onClick={() => {
                       setRevisionScope(value)
-                      setRevisionPreview(null)
                       setRevisionError(null)
                     }}
                   >
@@ -2813,6 +2995,14 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 <Input id="revision-agent-ai-key" type="password" value={flashcardAgentAiKey} onChange={(event) => setFlashcardAgentAiKey(event.target.value)} placeholder="Only sent to your chosen provider when you run revision" disabled={revisionLoading} />
               </div>
               <AiModelPicker apiKey={flashcardAgentAiKey} baseUrl={flashcardAgentBaseUrl} model={flashcardAgentModel} disabled={revisionLoading || aiConnectionTestLoading} onBaseUrlChange={setFlashcardAgentBaseUrl} onModelChange={setFlashcardAgentModel} />
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={testAiConnection} disabled={aiConnectionTestLoading || revisionLoading}>
+                <Sparkle className="mr-2" weight="bold" />
+                Test basic creation
+              </Button>
+              <Button variant="outline" onClick={runCompatibilityTests} disabled={aiConnectionTestLoading || revisionLoading}>Run compatibility tests</Button>
             </div>
 
             {revisionError && (
@@ -2836,21 +3026,22 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               </div>
             )}
 
-            {revisionPreview && (
-              <div className="max-h-80 space-y-3 overflow-y-auto rounded-md border p-3">
+            {revisionPreviewOpen && revisionPreview && (
+              <div className="space-y-3 rounded-md border p-3">
+                <div>
+                  <p className="font-medium">Completed changes</p>
+                  <p className="text-xs text-muted-foreground">Open a card to compare its proposed changes.</p>
+                </div>
                 {selectedRevisionCards.map((original) => {
                   const changes = getPatchChanges(original, revisionPreview)
                   if (changes.length === 0) return null
                   return (
-                    <div key={original.id} className="rounded-md border p-3">
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <p className="font-semibold">Card {set.cards.findIndex((item) => item.id === original.id) + 1}</p>
-                        <p className="text-xs text-muted-foreground">{changes.length} change{changes.length === 1 ? '' : 's'}</p>
-                      </div>
-                      {changes.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No changes returned for this card.</p>
-                      ) : (
-                        <div className="space-y-3">
+                    <details key={original.id} className="group rounded-md border p-3">
+                      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 font-semibold">
+                        <span>Card {set.cards.findIndex((item) => item.id === original.id) + 1}</span>
+                        <span className="text-xs font-normal text-muted-foreground">{changes.length} change{changes.length === 1 ? '' : 's'}</span>
+                      </summary>
+                      <div className="space-y-3 pt-3">
                           {changes.map((change) => (
                             <div key={`${original.id}-${change.field}`} className="grid gap-2 text-sm sm:grid-cols-2">
                               <div>
@@ -2872,40 +3063,62 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                               </div>
                             </div>
                           ))}
-                        </div>
-                      )}
-                    </div>
+                      </div>
+                    </details>
                   )
                 })}
               </div>
             )}
+          </div>
 
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button variant="outline" onClick={testAiConnection} disabled={aiConnectionTestLoading || revisionLoading}>
-                <Sparkle className="mr-2" weight="bold" />
-                Test basic creation
+          <div className="sticky bottom-0 z-10 flex flex-wrap justify-end gap-2 border-t bg-background px-4 py-3 sm:px-6">
+            {revisionLoading && (revisionJobState === 'running' || revisionJobState === 'cancelling') ? (
+              <Button variant="destructive" disabled={revisionJobState === 'cancelling'} onClick={cancelRevisionAndKeepProgress}>
+                {revisionJobState === 'cancelling' ? 'Cancelling...' : 'Cancel and keep progress'}
               </Button>
-              <Button variant="outline" onClick={runCompatibilityTests} disabled={aiConnectionTestLoading || revisionLoading}>Run compatibility tests</Button>
-              {revisionLoading && (revisionJobState === 'running' || revisionJobState === 'cancelling') && (
-                <Button variant="destructive" disabled={revisionJobState === 'cancelling'} onClick={() => { revisionCancelledRef.current = true; setRevisionJobState('cancelling'); revisionCancelRef.current?.abort() }}>
-                  {revisionJobState === 'cancelling' ? 'Cancelling...' : 'Cancel revision'}
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => setRevisionDialogOpen(false)} disabled={revisionLoading}>
+                  Done
                 </Button>
-              )}
-              <Button variant="outline" onClick={() => setRevisionDialogOpen(false)} disabled={revisionLoading}>
-                Cancel
-              </Button>
-              <Button variant="outline" onClick={runRevisionAgent} disabled={revisionLoading}>
-                <Sparkle className="mr-2" weight="bold" />
-                {revisionLoading ? 'Revising...' : revisionPreview ? 'Rerun revision' : 'Preview revision'}
-              </Button>
-              <Button onClick={applyRevisionPreview} disabled={!revisionPreview?.length || revisionLoading}>
-                <CheckCircle className="mr-2" weight="bold" />
-                Apply revision
-              </Button>
-            </div>
+                {!revisionJob && (
+                  <Button onClick={runRevisionAgent} disabled={revisionLoading}>
+                    <Sparkle className="mr-2" weight="bold" />
+                    Preview revision
+                  </Button>
+                )}
+                {revisionHasPending && (
+                  <Button onClick={runRevisionAgent} disabled={revisionLoading}>
+                    <Sparkle className="mr-2" weight="bold" />
+                    Continue
+                  </Button>
+                )}
+                <Button onClick={applyRevisionPreview} disabled={!revisionHasPreview || revisionLoading}>
+                  <CheckCircle className="mr-2" weight="bold" />
+                  Apply completed changes
+                </Button>
+              </>
+            )}
           </div>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={revisionDiscardOpen} onOpenChange={setRevisionDiscardOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard saved revision?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Completed preview changes and unfinished progress for this deck will be permanently removed. The deck itself will not change.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep revision</AlertDialogCancel>
+            <AlertDialogAction onClick={discardSavedRevision}>
+              Discard saved revision
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={imageAgentOpen} onOpenChange={(open) => {
         if ((imageAgentLoading || aiConnectionTestLoading) && !open) return
