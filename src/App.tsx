@@ -24,8 +24,8 @@ import { generateTestQuestions } from '@/lib/test-utils'
 import { calculatePrintLayout, paginateCardsFixedLength, calculateBackPagePositions } from '@/lib/print-utils'
 import { applyRevisionPatches, getPatchChanges } from '@/lib/flashcard-revision'
 import type { RevisionPatchOperation, RevisionScope } from '@/lib/flashcard-revision'
-import { buildRevisionRequestPayload, clearRevisionJob, createRevisionJob, getNextRevisionBatch, loadRevisionJob, markRevisionJob, mergeRevisionBatch, persistRevisionJob, revalidateRevisionJobForApply } from '@/lib/revision-job'
-import type { RevisionJob } from '@/lib/revision-job'
+import { buildRevisionRequestPayload, clearRevisionJob, createRevisionJob, getNextRevisionBatch, loadRevisionJob, markRevisionJob, mergeRevisionBatch, persistRevisionJob, planRevisionJobApply, preserveRevisionConflicts, refreshRevisionSourceSnapshots } from '@/lib/revision-job'
+import type { RevisionJob, RevisionPatchConflict } from '@/lib/revision-job'
 import { explainAiAgentError, formatAiAgentError } from '@/lib/ai-agent-errors'
 import { buildImageSearchIntent, getImageAgentOutcome, getImageReviewCandidateUpdates, getStoredImageCandidates } from '@/lib/image-agent'
 import { DEFAULT_IMAGE_PLACEMENT, getCardSideImage, imageAssetFromCandidate } from '@/lib/image-placement'
@@ -898,6 +898,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [revisionStatusMessage, setRevisionStatusMessage] = useState('Ready to revise selected cards.')
   const [revisionPreviewOpen, setRevisionPreviewOpen] = useState(false)
   const [revisionDiscardOpen, setRevisionDiscardOpen] = useState(false)
+  const [revisionApplyConflictSummary, setRevisionApplyConflictSummary] = useState<{
+    conflicts: RevisionPatchConflict[]
+    safeCount: number
+  } | null>(null)
   const [aiConnectionTestLoading, setAiConnectionTestLoading] = useState(false)
   const [compatibilityResults, setCompatibilityResults] = useState<CompatibilityResult[]>([])
   const [imageAgentSide, setImageAgentSide] = useState<ImageAgentTargetSide>(initialAgentDraft.side)
@@ -915,6 +919,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const imageAgentCancelRef = useRef<(() => void) | null>(null)
   const revisionCancelRef = useRef<AbortController | null>(null)
   const revisionCancelledRef = useRef(false)
+  const revisionCardsRef = useRef(set.cards)
+  revisionCardsRef.current = set.cards
   // Image search provider settings (persisted)
   const [imageBraveKey, setImageBraveKey] = useState(() => localStorage.getItem('flashforge_brave_key') ?? '')
   const [imagePixabayKey, setImagePixabayKey] = useState(() => localStorage.getItem('flashforge_pixabay_key') ?? '')
@@ -943,17 +949,31 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   useEffect(() => { localStorage.setItem('flashforge_google_cx', imageGoogleCx) }, [imageGoogleCx])
   useEffect(() => { localStorage.setItem('flashforge_image_provider', imageProvider) }, [imageProvider])
   useEffect(() => {
-    const restored = loadRevisionJob(localStorage, set.id, set.cards)
+    const restored = loadRevisionJob(localStorage, set.id, revisionCardsRef.current)
     setRevisionJob(restored)
-    if (!restored) return
+    setRevisionApplyConflictSummary(restored?.unresolvedConflicts.length
+      ? { conflicts: restored.unresolvedConflicts, safeCount: 0 }
+      : null)
+    if (!restored) {
+      setSelectedRevisionCardIds([])
+      setRevisionFeedback('')
+      setRevisionScope('both')
+      setRevisionJobState('idle')
+      setRevisionStatusMessage('Ready to revise selected cards.')
+      setRevisionPreviewOpen(false)
+      return
+    }
     setSelectedRevisionCardIds(restored.selectedCardIds)
     setRevisionFeedback(restored.feedback)
     setRevisionScope(restored.scope)
     setRevisionJobState(restored.status)
-    setRevisionStatusMessage(restored.pendingCardIds.length > 0
-      ? `Saved revision has ${restored.pendingCardIds.length} card${restored.pendingCardIds.length === 1 ? '' : 's'} remaining.`
-      : 'Saved revision is ready to review and apply.')
-  }, [set.id, set.cards])
+    setRevisionPreviewOpen(restored.unresolvedConflicts.length > 0)
+    setRevisionStatusMessage(restored.unresolvedConflicts.length > 0
+      ? `${restored.unresolvedConflicts.length} unresolved conflict${restored.unresolvedConflicts.length === 1 ? '' : 's'} remain.`
+      : restored.pendingCardIds.length > 0
+        ? `Saved revision has ${restored.pendingCardIds.length} card${restored.pendingCardIds.length === 1 ? '' : 's'} remaining.`
+        : 'Saved revision is ready to review and apply.')
+  }, [set.id])
   useEffect(() => {
     const timer = window.setTimeout(() => {
       saveAgentDraft(set.id, {
@@ -1130,6 +1150,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   }
 
   function updateCard(id: string, updates: Partial<FlashCard>) {
+    setRevisionApplyConflictSummary(null)
     updateSet(prev => ({
       ...prev,
       cards: prev.cards.map(c => c.id === id ? { ...c, ...updates } : c),
@@ -1137,6 +1158,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   }
 
   function deleteCard(id: string) {
+    setRevisionApplyConflictSummary(null)
     updateSet(prev => ({
       ...prev,
       cards: prev.cards.filter(c => c.id !== id),
@@ -1166,13 +1188,19 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     const restored = loadRevisionJob(localStorage, set.id, set.cards)
     if (restored) {
       setRevisionJob(restored)
+      setRevisionApplyConflictSummary(restored.unresolvedConflicts.length
+        ? { conflicts: restored.unresolvedConflicts, safeCount: 0 }
+        : null)
       setSelectedRevisionCardIds(restored.selectedCardIds)
       setRevisionFeedback(restored.feedback)
       setRevisionScope(restored.scope)
       setRevisionJobState(restored.status)
-      setRevisionStatusMessage(restored.pendingCardIds.length > 0
-        ? `Saved revision has ${restored.pendingCardIds.length} card${restored.pendingCardIds.length === 1 ? '' : 's'} remaining.`
-        : 'Saved revision is ready to review and apply.')
+      setRevisionStatusMessage(restored.unresolvedConflicts.length > 0
+        ? `${restored.unresolvedConflicts.length} unresolved conflict${restored.unresolvedConflicts.length === 1 ? '' : 's'} remain.`
+        : restored.pendingCardIds.length > 0
+          ? `Saved revision has ${restored.pendingCardIds.length} card${restored.pendingCardIds.length === 1 ? '' : 's'} remaining.`
+          : 'Saved revision is ready to review and apply.')
+      setRevisionPreviewOpen(restored.unresolvedConflicts.length > 0)
       setRevisionDialogOpen(true)
       setRevisionError(null)
       return
@@ -1185,6 +1213,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     setSelectedRevisionCardIds(targetIds)
     setFlashcardAgentMode('revise')
     setRevisionJob(null)
+    setRevisionApplyConflictSummary(null)
     setRevisionJobState('idle')
     setRevisionStatusMessage('Ready to revise selected cards.')
     setRevisionPreviewOpen(false)
@@ -1346,6 +1375,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       setRevisionError(null)
       setRevisionTechnicalDetails(null)
       setRevisionPreviewOpen(false)
+      setRevisionApplyConflictSummary(null)
 
       while (activeJob.pendingCardIds.length > 0) {
         if (revisionCancelledRef.current) throw new DOMException('Revision cancelled', 'AbortError')
@@ -1355,6 +1385,12 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         const end = start + batchCardIds.length - 1
         setRevisionCurrentRange({ start, end })
         setRevisionStatusMessage(`Revising cards ${start}-${end} of ${activeJob.selectedCardIds.length}.`)
+        activeJob = refreshRevisionSourceSnapshots(activeJob, set.cards, batchCardIds)
+        const snapshotPersisted = persistRevisionJob(localStorage, activeJob)
+        setRevisionJob(activeJob)
+        if (!snapshotPersisted) {
+          setRevisionError('Progress is available in this tab, but this browser could not save the current batch snapshot for recovery.')
+        }
 
         const controller = new AbortController()
         revisionCancelRef.current = controller
@@ -1468,6 +1504,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     setRevisionJobState('idle')
     setRevisionCurrentRange(null)
     setRevisionPreviewOpen(false)
+    setRevisionApplyConflictSummary(null)
     setRevisionError(null)
     setRevisionTechnicalDetails(null)
     setRevisionStatusMessage('Ready to revise selected cards.')
@@ -1475,11 +1512,24 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     toast.success('Saved revision discarded')
   }
 
-  async function applyRevisionPreview() {
+  async function applyRevisionPreview(applySafeChangesOnly = false) {
     if (!revisionJob || revisionLoading) return
-    const applicableJob = revalidateRevisionJobForApply(revisionJob, set.cards)
+    const applyPlan = planRevisionJobApply(revisionJob, set.cards)
+    const applicableJob = applyPlan.applicableJob
+    if (applyPlan.conflicts.length > 0 && !applySafeChangesOnly) {
+      setRevisionApplyConflictSummary({
+        conflicts: applyPlan.conflicts,
+        safeCount: applicableJob?.previewPatches.length ?? 0,
+      })
+      setRevisionPreviewOpen(true)
+      setRevisionError(null)
+      setRevisionStatusMessage(`${applyPlan.conflicts.length} visible change${applyPlan.conflicts.length === 1 ? '' : 's'} conflict with current card content. Review before applying.`)
+      return
+    }
     if (!applicableJob || applicableJob.previewPatches.length === 0) {
-      setRevisionError('No safe completed changes remain to apply. Cards edited or removed since preview were skipped.')
+      setRevisionError(applyPlan.conflicts.length > 0
+        ? 'No safe changes remain to apply. Return to review or explicitly discard the unresolved changes.'
+        : 'No safe completed changes remain to apply.')
       return
     }
     const preview = applicableJob.previewPatches
@@ -1538,8 +1588,30 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
       }
 
       updateSet((prev) => ({ ...prev, cards: workingCards }))
+      const appliedCount = preview.length - imagePatches.length + imagesApplied + imagesNeedReview
+      if (applyPlan.conflicts.length > 0) {
+        const unresolvedJob = preserveRevisionConflicts(revisionJob, applyPlan.conflicts)
+        const persisted = persistRevisionJob(localStorage, unresolvedJob)
+        setRevisionJob(unresolvedJob)
+        setRevisionApplyConflictSummary({
+          conflicts: applyPlan.conflicts,
+          safeCount: 0,
+        })
+        setRevisionJobState('partial')
+        setRevisionPreviewOpen(true)
+        setRevisionStatusMessage(`${appliedCount} change${appliedCount === 1 ? '' : 's'} applied; ${applyPlan.conflicts.length} skipped due to conflicts and kept unresolved.`)
+        setRevisionError(persisted
+          ? null
+          : 'Safe changes were applied, but this browser could not persist the unresolved conflict state.')
+        toast.message('Safe revision changes applied; conflicts remain', {
+          description: `${appliedCount} applied · ${applyPlan.conflicts.length} skipped${imagesFailed > 0 ? ` · ${imagesFailed} image search failed` : ''}`,
+        })
+        return
+      }
+
       clearRevisionJob(localStorage, set.id)
       setRevisionJob(null)
+      setRevisionApplyConflictSummary(null)
       setRevisionDialogOpen(false)
       if (imagesNeedReview > 0) {
         toast.message('Revision applied; image options need review', {
@@ -2929,7 +3001,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 <div>
                   <p className="font-medium">Saved revision available</p>
                   <p className="text-muted-foreground">
-                    {revisionHasPending
+                    {revisionJob.unresolvedConflicts.length > 0
+                      ? `${revisionJob.unresolvedConflicts.length} skipped change${revisionJob.unresolvedConflicts.length === 1 ? '' : 's'} remain unresolved until you review or discard them.`
+                      : revisionHasPending
                       ? `${revisionJob.pendingCardIds.length} card${revisionJob.pendingCardIds.length === 1 ? '' : 's'} remain. Continue from the next unfinished card.`
                       : 'All selected cards were processed. Review or apply the completed work.'}
                   </p>
@@ -3009,6 +3083,57 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm">
                 <p className="text-destructive">{revisionError}</p>
                 {revisionTechnicalDetails && <details className="mt-2 text-foreground"><summary className="cursor-pointer font-medium">Technical details</summary><pre className="mt-2 whitespace-pre-wrap text-xs">{revisionTechnicalDetails}</pre></details>}
+              </div>
+            )}
+
+            {revisionApplyConflictSummary && (
+              <div className="space-y-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                <div>
+                  <p className="font-medium">Some preview changes conflict with current cards</p>
+                  <p className="text-muted-foreground">
+                    {revisionApplyConflictSummary.conflicts.length} change{revisionApplyConflictSummary.conflicts.length === 1 ? '' : 's'} will be skipped.
+                    {revisionApplyConflictSummary.safeCount > 0
+                      ? ` ${revisionApplyConflictSummary.safeCount} safe change${revisionApplyConflictSummary.safeCount === 1 ? '' : 's'} can still be applied.`
+                      : ' No additional safe changes remain.'}
+                  </p>
+                </div>
+                <ul className="space-y-1 text-xs">
+                  {revisionApplyConflictSummary.conflicts.map((conflict) => {
+                    const cardIndex = set.cards.findIndex((card) => card.id === conflict.patch.cardId)
+                    const fieldLabel = conflict.patch.field === 'frontText' ? 'front text'
+                      : conflict.patch.field === 'backText' ? 'back text'
+                        : conflict.patch.field === 'frontImageQuery' ? 'front image'
+                          : 'back image'
+                    return (
+                      <li key={`${conflict.patch.cardId}:${conflict.patch.field}`} className="rounded border border-border bg-background px-2 py-1">
+                        {cardIndex >= 0 ? `Card ${cardIndex + 1}` : `Removed card ${conflict.patch.cardId}`} · {fieldLabel} · {conflict.reason === 'source-changed' ? 'edited since preview' : 'source unavailable'}
+                      </li>
+                    )
+                  })}
+                </ul>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => applyRevisionPreview(true)}
+                    disabled={revisionLoading || revisionApplyConflictSummary.safeCount === 0}
+                  >
+                    Apply safe changes only
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setRevisionApplyConflictSummary(null)
+                      setRevisionPreviewOpen(true)
+                      setRevisionStatusMessage('Review the completed changes. Conflicts will be checked again before applying.')
+                    }}
+                    disabled={revisionLoading}
+                  >
+                    Return to review
+                  </Button>
+                </div>
               </div>
             )}
 
@@ -3093,7 +3218,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                     Continue
                   </Button>
                 )}
-                <Button onClick={applyRevisionPreview} disabled={!revisionHasPreview || revisionLoading}>
+                <Button onClick={() => applyRevisionPreview()} disabled={!revisionHasPreview || revisionLoading || !!revisionApplyConflictSummary}>
                   <CheckCircle className="mr-2" weight="bold" />
                   Apply completed changes
                 </Button>

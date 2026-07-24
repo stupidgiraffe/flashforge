@@ -45,6 +45,9 @@ describe('AI model browser', () => {
     expect(isIntentionalModelTap({ x: 10, y: 10 }, { x: 10, y: 42 })).toBe(false)
     expect(browserSource).toContain('onPointerMove')
     expect(browserSource).toContain('if (pointerMovedRef.current && event.detail !== 0) return')
+    expect(browserSource).toContain("import type { MouseEvent } from 'react'")
+    expect(browserSource).toContain('event: MouseEvent<HTMLButtonElement>')
+    expect(browserSource).not.toContain('React.MouseEvent')
   })
 
   it('persists recent model metadata without credentials', () => {

@@ -10,6 +10,9 @@ import {
   markRevisionJob,
   mergeRevisionBatch,
   persistRevisionJob,
+  planRevisionJobApply,
+  preserveRevisionConflicts,
+  refreshRevisionSourceSnapshots,
   revalidateRevisionJobForApply,
   revisionJobStorageKey,
   type RevisionStorage,
@@ -84,7 +87,7 @@ describe('revision jobs', () => {
 
   it('revalidates restored patches and prevents removed cards from receiving patches', () => {
     const raw = {
-      ...createRevisionJob('deck', ['c1', 'c2'], 'Revise', 'text', 10),
+      ...createRevisionJob('deck', ['c1', 'c2'], 'Revise', 'text', 10, cards(2)),
       processedCardIds: ['c1', 'c2'],
       pendingCardIds: [],
       previewPatches: [
@@ -99,6 +102,11 @@ describe('revision jobs', () => {
     const restored = revalidateRevisionJobForApply(raw as ReturnType<typeof createRevisionJob>, cards(1))
     expect(restored?.selectedCardIds).toEqual(['c1'])
     expect(restored?.previewPatches).toEqual([{ cardId: 'c1', field: 'frontText', value: 'Valid' }])
+    const plan = planRevisionJobApply(raw as ReturnType<typeof createRevisionJob>, cards(1))
+    expect(plan.conflicts).toEqual([{
+      patch: { cardId: 'c2', field: 'backText', value: 'Removed card' },
+      reason: 'card-missing',
+    }])
   })
 
   it('does not apply a restored patch over a field edited after preview generation', () => {
@@ -110,11 +118,178 @@ describe('revision jobs', () => {
     ], 0, 20)
     const currentCards = [{ ...originalCards[0], frontText: 'Teacher edit' }]
 
-    const restored = revalidateRevisionJobForApply(complete, currentCards)
-    expect(restored?.previewPatches).toEqual([
+    const plan = planRevisionJobApply(complete, currentCards)
+    expect(plan.applicableJob?.previewPatches).toEqual([
       { cardId: 'c1', field: 'backText', value: 'Safe suggestion' },
     ])
-    expect(restored?.rejectedOperationCount).toBe(1)
+    expect(plan.conflicts).toEqual([{
+      patch: { cardId: 'c1', field: 'frontText', value: 'AI suggestion' },
+      reason: 'source-changed',
+    }])
+  })
+
+  it('allows image replacement when an uploaded data image is unchanged', () => {
+    const originalCards = cards(1)
+    const complete = mergeRevisionBatch(
+      createRevisionJob('deck', ['c1'], 'Replace image', 'images', 10, originalCards),
+      ['c1'],
+      [{ cardId: 'c1', field: 'frontImageQuery', value: 'clear classroom object' }],
+      0,
+      20,
+    )
+
+    const plan = planRevisionJobApply(complete, originalCards)
+    expect(plan.conflicts).toEqual([])
+    expect(plan.applicableJob?.previewPatches).toHaveLength(1)
+    expect(JSON.stringify(complete.sourceCards)).not.toContain('data:image')
+    expect(complete.sourceCards[0].frontImageState).toMatch(/^local:\d+:[0-9a-f]+$/)
+  })
+
+  it('detects replaced or removed uploaded data images as conflicts', () => {
+    const originalCards = cards(1)
+    const complete = mergeRevisionBatch(
+      createRevisionJob('deck', ['c1'], 'Replace image', 'images', 10, originalCards),
+      ['c1'],
+      [{ cardId: 'c1', field: 'frontImageQuery', value: 'clear classroom object' }],
+      0,
+      20,
+    )
+
+    const replaced = planRevisionJobApply(complete, [{
+      ...originalCards[0],
+      frontImageUrl: 'data:image/png;base64,different',
+      frontImage: {
+        ...originalCards[0].frontImage!,
+        url: 'data:image/png;base64,different',
+        originalUrl: 'data:image/png;base64,different',
+      },
+    }])
+    const removed = planRevisionJobApply(complete, [{
+      ...originalCards[0],
+      frontImageUrl: undefined,
+      frontImage: undefined,
+    }])
+
+    expect(replaced.conflicts[0]?.reason).toBe('source-changed')
+    expect(removed.conflicts[0]?.reason).toBe('source-changed')
+  })
+
+  it('distinguishes unchanged and changed remote image sources', () => {
+    const originalCards = [{
+      ...cards(1)[0],
+      frontImageUrl: 'https://images.example/classroom.png',
+      frontImage: undefined,
+    }]
+    const complete = mergeRevisionBatch(
+      createRevisionJob('deck', ['c1'], 'Replace image', 'images', 10, originalCards),
+      ['c1'],
+      [{ cardId: 'c1', field: 'frontImageQuery', value: 'clear classroom object' }],
+      0,
+      20,
+    )
+
+    expect(planRevisionJobApply(complete, originalCards).conflicts).toEqual([])
+    expect(planRevisionJobApply(complete, [{
+      ...originalCards[0],
+      frontImageUrl: 'https://images.example/replacement.png',
+    }]).conflicts[0]?.reason).toBe('source-changed')
+    expect(complete.sourceCards[0].frontImageState).toBe('remote:https://images.example/classroom.png')
+  })
+
+  it('refreshes only pending source snapshots before a resumed batch', () => {
+    const originalCards = cards(2)
+    const partial = mergeRevisionBatch(
+      createRevisionJob('deck', ['c1', 'c2'], 'Simplify', 'text', 10, originalCards),
+      ['c1'],
+      [{ cardId: 'c1', field: 'frontText', value: 'First result' }],
+      0,
+      20,
+    )
+    const editedCards = originalCards.map((card) => card.id === 'c2'
+      ? { ...card, frontText: 'Teacher edited pending card' }
+      : { ...card, frontText: 'Teacher edited processed card' })
+
+    const refreshed = refreshRevisionSourceSnapshots(partial, editedCards, ['c1', 'c2'], 30)
+    const resumedPayload = buildRevisionRequestPayload(refreshed, originalCards, ['c2'], {
+      apiKey: 'api-key',
+      baseUrl: 'https://provider.example/v1',
+      model: 'model-1',
+    })
+    const complete = mergeRevisionBatch(refreshed, ['c2'], [
+      { cardId: 'c2', field: 'frontText', value: 'Resumed result' },
+    ], 0, 40)
+    const plan = planRevisionJobApply(complete, editedCards)
+
+    expect(refreshed.sourceCards.find((card) => card.id === 'c1')?.frontText).toBe('Front 1')
+    expect(refreshed.sourceCards.find((card) => card.id === 'c2')?.frontText).toBe('Teacher edited pending card')
+    expect(resumedPayload.existingCards[0].frontText).toBe('Teacher edited pending card')
+    expect(plan.applicableJob?.previewPatches).toContainEqual({
+      cardId: 'c2',
+      field: 'frontText',
+      value: 'Resumed result',
+    })
+    expect(plan.conflicts).toEqual([{
+      patch: { cardId: 'c1', field: 'frontText', value: 'First result' },
+      reason: 'source-changed',
+    }])
+  })
+
+  it('preserves conflicting preview patches until explicit discard', () => {
+    const storage = memoryStorage()
+    const originalCards = cards(1)
+    const complete = mergeRevisionBatch(
+      createRevisionJob('deck', ['c1'], 'Revise', 'text', 10, originalCards),
+      ['c1'],
+      [
+        { cardId: 'c1', field: 'frontText', value: 'Conflicting suggestion' },
+        { cardId: 'c1', field: 'backText', value: 'Safe suggestion' },
+      ],
+      0,
+      20,
+    )
+    const currentCards = [{ ...originalCards[0], frontText: 'Teacher edit' }]
+    const plan = planRevisionJobApply(complete, currentCards)
+    const unresolved = preserveRevisionConflicts(complete, plan.conflicts, 30)
+
+    persistRevisionJob(storage, unresolved)
+    expect(plan.applicableJob?.previewPatches).toEqual([
+      { cardId: 'c1', field: 'backText', value: 'Safe suggestion' },
+    ])
+    expect(unresolved.previewPatches).toEqual([
+      { cardId: 'c1', field: 'frontText', value: 'Conflicting suggestion' },
+    ])
+    expect(loadRevisionJob(storage, 'deck', currentCards, 40)?.unresolvedConflicts).toHaveLength(1)
+    expect(storage.values.has(revisionJobStorageKey('deck'))).toBe(true)
+
+    clearRevisionJob(storage, 'deck')
+    expect(storage.values.has(revisionJobStorageKey('deck'))).toBe(false)
+  })
+
+  it('keeps removed-card conflicts recoverable after reload', () => {
+    const storage = memoryStorage()
+    const originalCards = cards(2)
+    const complete = mergeRevisionBatch(
+      createRevisionJob('deck', ['c1', 'c2'], 'Revise', 'text', 10, originalCards),
+      ['c1', 'c2'],
+      [
+        { cardId: 'c1', field: 'frontText', value: 'Safe suggestion' },
+        { cardId: 'c2', field: 'backText', value: 'Removed-card suggestion' },
+      ],
+      0,
+      20,
+    )
+    const currentCards = originalCards.slice(0, 1)
+    const plan = planRevisionJobApply(complete, currentCards)
+    const unresolved = preserveRevisionConflicts(complete, plan.conflicts, 30)
+    persistRevisionJob(storage, unresolved)
+
+    const restored = loadRevisionJob(storage, 'deck', currentCards, 40)
+    expect(restored?.selectedCardIds).toEqual(['c1'])
+    expect(restored?.previewPatches).toEqual([])
+    expect(restored?.unresolvedConflicts).toEqual([{
+      patch: { cardId: 'c2', field: 'backText', value: 'Removed-card suggestion' },
+      reason: 'card-missing',
+    }])
   })
 
   it('clears state only after the caller explicitly reports successful application', () => {

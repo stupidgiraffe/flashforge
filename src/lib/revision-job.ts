@@ -5,7 +5,7 @@ import {
   type RevisionScope,
 } from './flashcard-revision'
 
-export const REVISION_JOB_VERSION = 1
+export const REVISION_JOB_VERSION = 2
 export const REVISION_BATCH_SIZE = 5
 export const REVISION_JOB_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -20,6 +20,7 @@ export interface RevisionJob {
   processedCardIds: string[]
   pendingCardIds: string[]
   previewPatches: RevisionPatchOperation[]
+  unresolvedConflicts: RevisionPatchConflict[]
   rejectedOperationCount: number
   sourceCards: RevisionSourceCard[]
   createdAt: number
@@ -28,8 +29,23 @@ export interface RevisionJob {
 }
 
 export type RevisionSourceCard = Pick<FlashCard, 'id' | 'frontText' | 'backText'> & {
+  frontImageState: RevisionImageSourceState
+  backImageState: RevisionImageSourceState
   frontImageUrl?: string
   backImageUrl?: string
+}
+
+export type RevisionImageSourceState = 'none' | `remote:${string}` | `local:${string}`
+export type RevisionPatchConflictReason = 'card-missing' | 'source-missing' | 'source-changed'
+
+export interface RevisionPatchConflict {
+  patch: RevisionPatchOperation
+  reason: RevisionPatchConflictReason
+}
+
+export interface RevisionApplyPlan {
+  applicableJob: RevisionJob | null
+  conflicts: RevisionPatchConflict[]
 }
 
 export interface RevisionProviderConfig {
@@ -79,6 +95,61 @@ function safeRemoteImageUrl(value: unknown): string | undefined {
   }
 }
 
+function stableLocalImageFingerprint(value: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return `${value.length}:${(hash >>> 0).toString(16)}`
+}
+
+function imageSourceValue(card: FlashCard, side: 'front' | 'back'): string {
+  const directUrl = side === 'front' ? card.frontImageUrl : card.backImageUrl
+  const asset = side === 'front' ? card.frontImage : card.backImage
+  return directUrl || asset?.url || asset?.originalUrl || ''
+}
+
+function imageSourceState(card: FlashCard, side: 'front' | 'back'): RevisionImageSourceState {
+  const value = imageSourceValue(card, side)
+  if (!value) return 'none'
+  const remoteUrl = safeRemoteImageUrl(value)
+  return remoteUrl
+    ? `remote:${remoteUrl}`
+    : `local:${stableLocalImageFingerprint(value)}`
+}
+
+function remoteImageUrl(card: FlashCard, side: 'front' | 'back'): string | undefined {
+  const asset = side === 'front' ? card.frontImage : card.backImage
+  const directUrl = side === 'front' ? card.frontImageUrl : card.backImageUrl
+  return safeRemoteImageUrl(asset?.originalUrl)
+    ?? safeRemoteImageUrl(directUrl)
+    ?? safeRemoteImageUrl(asset?.url)
+}
+
+function snapshotRevisionCard(card: FlashCard): RevisionSourceCard {
+  const frontImageUrl = remoteImageUrl(card, 'front')
+  const backImageUrl = remoteImageUrl(card, 'back')
+  return {
+    id: card.id,
+    frontText: card.frontText,
+    backText: card.backText,
+    frontImageState: imageSourceState(card, 'front'),
+    backImageState: imageSourceState(card, 'back'),
+    ...(frontImageUrl ? { frontImageUrl } : {}),
+    ...(backImageUrl ? { backImageUrl } : {}),
+  }
+}
+
+function isRevisionImageSourceState(value: unknown): value is RevisionImageSourceState {
+  return value === 'none'
+    || (typeof value === 'string' && (value.startsWith('remote:http://') || value.startsWith('remote:https://') || /^local:\d+:[0-9a-f]+$/.test(value)))
+}
+
+function patchKey(patch: Pick<RevisionPatchOperation, 'cardId' | 'field'>): string {
+  return `${patch.cardId}:${patch.field}`
+}
+
 export function revisionJobStorageKey(deckId: string): string {
   return `flashforge_revision_job:v${REVISION_JOB_VERSION}:${deckId}`
 }
@@ -102,20 +173,11 @@ export function createRevisionJob(
     processedCardIds: [],
     pendingCardIds: [...selected],
     previewPatches: [],
+    unresolvedConflicts: [],
     rejectedOperationCount: 0,
     sourceCards: cards
       .filter((card) => selectedSet.has(card.id))
-      .map((card) => {
-        const frontImageUrl = safeRemoteImageUrl(card.frontImage?.originalUrl || card.frontImageUrl)
-        const backImageUrl = safeRemoteImageUrl(card.backImage?.originalUrl || card.backImageUrl)
-        return {
-          id: card.id,
-          frontText: card.frontText,
-          backText: card.backText,
-          ...(frontImageUrl ? { frontImageUrl } : {}),
-          ...(backImageUrl ? { backImageUrl } : {}),
-        }
-      }),
+      .map(snapshotRevisionCard),
     createdAt: now,
     updatedAt: now,
     status: 'running',
@@ -158,12 +220,40 @@ export function mergeRevisionBatch(
     processedCardIds: job.selectedCardIds.filter((id) => processed.has(id)),
     pendingCardIds,
     previewPatches: mergedPatches,
+    unresolvedConflicts: job.unresolvedConflicts.filter((conflict) => !batch.includes(conflict.patch.cardId)),
     rejectedOperationCount: job.rejectedOperationCount
       + rejected.length
       + duplicateCount
       + Math.max(0, providerRejectedCount),
     updatedAt: now,
     status: pendingCardIds.length === 0 ? 'complete' : 'partial',
+  }
+}
+
+export function refreshRevisionSourceSnapshots(
+  job: RevisionJob,
+  cards: FlashCard[],
+  batchCardIds: Iterable<string>,
+  now = Date.now(),
+): RevisionJob {
+  const pendingIds = new Set(uniqueIds(batchCardIds).filter((id) => job.pendingCardIds.includes(id)))
+  if (pendingIds.size === 0) return job
+
+  const currentById = new Map(cards.map((card) => [card.id, card]))
+  const refreshedById = new Map(job.sourceCards.map((card) => [card.id, card]))
+  for (const cardId of pendingIds) {
+    const current = currentById.get(cardId)
+    if (current) refreshedById.set(cardId, snapshotRevisionCard(current))
+    else refreshedById.delete(cardId)
+  }
+
+  return {
+    ...job,
+    sourceCards: job.selectedCardIds
+      .map((cardId) => refreshedById.get(cardId))
+      .filter((card): card is RevisionSourceCard => !!card),
+    updatedAt: now,
+    status: 'running',
   }
 }
 
@@ -189,14 +279,33 @@ export function restoreRevisionJob(
   if (raw.scope !== 'text' && raw.scope !== 'images' && raw.scope !== 'both') return null
 
   const availableIds = new Set(cards.map((card) => card.id))
-  const selectedCardIds = uniqueIds(raw.selectedCardIds ?? []).filter((id) => availableIds.has(id))
-  if (selectedCardIds.length === 0) return null
+  const requestedCardIds = uniqueIds(raw.selectedCardIds ?? [])
+  const selectedCardIds = requestedCardIds.filter((id) => availableIds.has(id))
 
   const processedSet = new Set(uniqueIds(raw.processedCardIds ?? []).filter((id) => selectedCardIds.includes(id)))
   const processedCardIds = selectedCardIds.filter((id) => processedSet.has(id))
   const pendingCardIds = selectedCardIds.filter((id) => !processedSet.has(id))
   const rawPatches = Array.isArray(raw.previewPatches) ? raw.previewPatches : []
   const { validPatches, rejected } = validateRevisionPatches(rawPatches, selectedCardIds, raw.scope)
+  const rawConflictPatches = Array.isArray(raw.unresolvedConflicts)
+    ? raw.unresolvedConflicts.map((conflict) => conflict?.patch)
+    : []
+  const { validPatches: validConflictPatches } = validateRevisionPatches(
+    rawConflictPatches,
+    requestedCardIds,
+    raw.scope,
+  )
+  const validConflictPatchKeys = new Set(validConflictPatches.map(patchKey))
+  const unresolvedConflicts = Array.isArray(raw.unresolvedConflicts)
+    ? raw.unresolvedConflicts.filter((conflict): conflict is RevisionPatchConflict => (
+      !!conflict
+      && typeof conflict === 'object'
+      && !!conflict.patch
+      && validConflictPatchKeys.has(patchKey(conflict.patch))
+      && (conflict.reason === 'card-missing' || conflict.reason === 'source-missing' || conflict.reason === 'source-changed')
+    ))
+    : []
+  if (selectedCardIds.length === 0 && unresolvedConflicts.length === 0) return null
   const suppliedRejected = Number.isFinite(raw.rejectedOperationCount) ? Number(raw.rejectedOperationCount) : 0
   const sourceCards = Array.isArray(raw.sourceCards)
     ? raw.sourceCards
@@ -206,6 +315,8 @@ export function restoreRevisionJob(
         && selectedCardIds.includes(card.id)
         && typeof card.frontText === 'string'
         && typeof card.backText === 'string'
+        && isRevisionImageSourceState(card.frontImageState)
+        && isRevisionImageSourceState(card.backImageState)
       ))
       .map((card) => {
         const frontImageUrl = safeRemoteImageUrl(card.frontImageUrl)
@@ -214,6 +325,8 @@ export function restoreRevisionJob(
           id: card.id,
           frontText: card.frontText,
           backText: card.backText,
+          frontImageState: card.frontImageState,
+          backImageState: card.backImageState,
           ...(frontImageUrl ? { frontImageUrl } : {}),
           ...(backImageUrl ? { backImageUrl } : {}),
         }
@@ -221,7 +334,9 @@ export function restoreRevisionJob(
     : []
   const createdAt = typeof raw.createdAt === 'number' ? raw.createdAt : raw.updatedAt
   const suppliedStatus = raw.status
-  const status: RevisionJobStatus = pendingCardIds.length === 0
+  const status: RevisionJobStatus = unresolvedConflicts.length > 0
+    ? 'partial'
+    : pendingCardIds.length === 0
     ? 'complete'
     : suppliedStatus === 'cancelled' || suppliedStatus === 'failed'
       ? suppliedStatus
@@ -238,6 +353,7 @@ export function restoreRevisionJob(
     processedCardIds,
     pendingCardIds,
     previewPatches: validPatches,
+    unresolvedConflicts,
     rejectedOperationCount: Math.max(0, suppliedRejected) + rejected.length,
     sourceCards,
     createdAt,
@@ -290,29 +406,32 @@ export function buildRevisionRequestPayload(
 ): RevisionRequestPayload {
   const batch = uniqueIds(batchCardIds)
   const cardsById = new Map(cards.map((card) => [card.id, card]))
+  const sourceById = new Map(job.sourceCards.map((card) => [card.id, card]))
   const includeImages = job.scope === 'images' || job.scope === 'both'
   return {
     mode: 'revise',
     instructions: job.feedback,
     revisionScope: job.scope,
     existingCards: batch
-      .map((id) => cardsById.get(id))
-      .filter((card): card is FlashCard => !!card)
-      .map((card) => {
+      .map((id) => {
+        const source = sourceById.get(id)
+        const current = cardsById.get(id)
+        if (!source && !current) return null
         const frontImageUrl = includeImages
-          ? safeRemoteImageUrl(card.frontImage?.originalUrl || card.frontImageUrl)
+          ? source?.frontImageUrl ?? (current ? remoteImageUrl(current, 'front') : undefined)
           : undefined
         const backImageUrl = includeImages
-          ? safeRemoteImageUrl(card.backImage?.originalUrl || card.backImageUrl)
+          ? source?.backImageUrl ?? (current ? remoteImageUrl(current, 'back') : undefined)
           : undefined
         return {
-          id: card.id,
-          frontText: card.frontText,
-          backText: card.backText,
+          id,
+          frontText: source?.frontText ?? current!.frontText,
+          backText: source?.backText ?? current!.backText,
           ...(frontImageUrl ? { frontImageUrl } : {}),
           ...(backImageUrl ? { backImageUrl } : {}),
         }
-      }),
+      })
+      .filter((card): card is RevisionRequestPayload['existingCards'][number] => !!card),
     aiApiKey: provider.apiKey.trim(),
     aiBaseUrl: provider.baseUrl.trim(),
     aiModel: provider.model.trim(),
@@ -323,17 +442,31 @@ export function revalidateRevisionJobForApply(
   job: RevisionJob,
   cards: FlashCard[],
 ): RevisionJob | null {
-  const restored = restoreRevisionJob(job, job.deckId, cards, job.updatedAt)
-  if (!restored || restored.sourceCards.length === 0) return restored
+  return planRevisionJobApply(job, cards).applicableJob
+}
 
+export function planRevisionJobApply(
+  job: RevisionJob,
+  cards: FlashCard[],
+): RevisionApplyPlan {
+  const restored = restoreRevisionJob(job, job.deckId, cards, job.updatedAt)
   const currentById = new Map(cards.map((card) => [card.id, card]))
-  const sourceById = new Map(restored.sourceCards.map((card) => [card.id, card]))
-  let conflictCount = 0
-  const previewPatches = restored.previewPatches.filter((patch) => {
+  const sourceById = new Map(job.sourceCards.map((card) => [card.id, card]))
+  const { validPatches } = validateRevisionPatches(
+    job.previewPatches,
+    job.selectedCardIds,
+    job.scope,
+  )
+  const conflicts: RevisionPatchConflict[] = []
+  const previewPatches = validPatches.filter((patch) => {
     const current = currentById.get(patch.cardId)
     const source = sourceById.get(patch.cardId)
-    if (!current || !source) {
-      conflictCount += 1
+    if (!current) {
+      conflicts.push({ patch, reason: 'card-missing' })
+      return false
+    }
+    if (!source) {
+      conflicts.push({ patch, reason: 'source-missing' })
       return false
     }
     const unchanged = patch.field === 'frontText'
@@ -341,15 +474,32 @@ export function revalidateRevisionJobForApply(
       : patch.field === 'backText'
         ? current.backText === source.backText
         : patch.field === 'frontImageQuery'
-          ? (current.frontImage?.originalUrl || current.frontImageUrl || '') === (source.frontImageUrl || '')
-          : (current.backImage?.originalUrl || current.backImageUrl || '') === (source.backImageUrl || '')
-    if (!unchanged) conflictCount += 1
+          ? imageSourceState(current, 'front') === source.frontImageState
+          : imageSourceState(current, 'back') === source.backImageState
+    if (!unchanged) conflicts.push({ patch, reason: 'source-changed' })
     return unchanged
   })
 
   return {
-    ...restored,
-    previewPatches,
-    rejectedOperationCount: restored.rejectedOperationCount + conflictCount,
+    applicableJob: restored ? {
+      ...restored,
+      previewPatches,
+    } : null,
+    conflicts,
+  }
+}
+
+export function preserveRevisionConflicts(
+  job: RevisionJob,
+  conflicts: RevisionPatchConflict[],
+  now = Date.now(),
+): RevisionJob {
+  const conflictKeys = new Set(conflicts.map((conflict) => patchKey(conflict.patch)))
+  return {
+    ...job,
+    previewPatches: job.previewPatches.filter((patch) => conflictKeys.has(patchKey(patch))),
+    unresolvedConflicts: conflicts,
+    updatedAt: now,
+    status: 'partial',
   }
 }

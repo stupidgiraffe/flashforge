@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { MouseEvent } from 'react'
 import { Check, MagnifyingGlass } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -74,7 +75,7 @@ export function AiModelBrowser({ provider, models, model, disabled, onModelChang
     ?? recommendedModels.find((item) => item.id === model)
     ?? recentModels.find((item) => item.id === model)
 
-  function chooseModel(event: React.MouseEvent<HTMLButtonElement>, item: AiModelOption) {
+  function chooseModel(event: MouseEvent<HTMLButtonElement>, item: AiModelOption) {
     if (pointerMovedRef.current && event.detail !== 0) return
     setRecentModels(rememberRecentModel(item))
     onModelChange(item.id)
