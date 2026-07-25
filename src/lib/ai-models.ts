@@ -16,6 +16,11 @@ interface CachedModels {
   models: AiModelOption[]
 }
 
+export interface ModelHistoryStorage {
+  getItem(key: string): string | null
+  setItem(key: string, value: string): void
+}
+
 interface AiProviderDefinition {
   label: string
   baseUrl: string
@@ -108,6 +113,8 @@ export const AI_PROVIDER_DEFAULTS: Record<AiProvider, AiProviderDefinition> = {
 }
 
 const CACHE_MAX_AGE_MS = 60 * 60 * 1000
+export const MODEL_BROWSER_PAGE_SIZE = 60
+const RECENT_MODEL_LIMIT = 6
 
 function cacheKey(provider: AiProvider, baseUrl: string): string {
   let host = 'custom'
@@ -146,4 +153,74 @@ export function inferAiProvider(baseUrl: string): AiProvider {
 export function formatModelPrice(value?: number): string | null {
   if (!Number.isFinite(value)) return null
   return `$${Number(value).toFixed(Number(value) < 0.01 ? 4 : 2)}/1M tokens`
+}
+
+export function filterModelOptions(models: AiModelOption[], query: string): AiModelOption[] {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return models
+  return models.filter((item) => (
+    `${item.name} ${item.id} ${item.description ?? ''}`.toLowerCase().includes(needle)
+  ))
+}
+
+export function getVisibleModelOptions(
+  models: AiModelOption[],
+  query: string,
+  limit = MODEL_BROWSER_PAGE_SIZE,
+): AiModelOption[] {
+  return filterModelOptions(models, query).slice(0, Math.max(1, limit))
+}
+
+function recentModelsKey(provider: AiProvider): string {
+  return `flashforge_recent_ai_models:${provider}`
+}
+
+export function readRecentModels(
+  provider: AiProvider,
+  storage: ModelHistoryStorage = localStorage,
+): AiModelOption[] {
+  try {
+    const parsed = JSON.parse(storage.getItem(recentModelsKey(provider)) || '[]') as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((item): item is AiModelOption => (
+        !!item
+        && typeof item.id === 'string'
+        && typeof item.name === 'string'
+        && item.provider === provider
+      ))
+      .slice(0, RECENT_MODEL_LIMIT)
+  } catch {
+    return []
+  }
+}
+
+export function rememberRecentModel(
+  modelOption: AiModelOption,
+  storage: ModelHistoryStorage = localStorage,
+): AiModelOption[] {
+  const safeModel: AiModelOption = {
+    id: modelOption.id,
+    name: modelOption.name,
+    provider: modelOption.provider,
+    ...(modelOption.description ? { description: modelOption.description } : {}),
+    ...(modelOption.contextLength ? { contextLength: modelOption.contextLength } : {}),
+    ...(Number.isFinite(modelOption.inputPrice) ? { inputPrice: modelOption.inputPrice } : {}),
+    ...(Number.isFinite(modelOption.outputPrice) ? { outputPrice: modelOption.outputPrice } : {}),
+    ...(modelOption.structuredOutput ? { structuredOutput: true } : {}),
+  }
+  const recent = [
+    safeModel,
+    ...readRecentModels(modelOption.provider, storage).filter((item) => item.id !== modelOption.id),
+  ].slice(0, RECENT_MODEL_LIMIT)
+  try { storage.setItem(recentModelsKey(modelOption.provider), JSON.stringify(recent)) } catch { return recent }
+  return recent
+}
+
+export function isIntentionalModelTap(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  threshold = 8,
+): boolean {
+  return Math.hypot(end.x - start.x, end.y - start.y) <= threshold
 }

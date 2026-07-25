@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowsClockwise, MagnifyingGlass } from '@phosphor-icons/react'
+import { useEffect, useState } from 'react'
+import { ArrowsClockwise } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { AiModelBrowser } from '@/components/AiModelBrowser'
 import { AI_PROVIDER_DEFAULTS, formatModelPrice, inferAiProvider, readCachedModels, writeCachedModels } from '@/lib/ai-models'
 import type { AiModelOption, AiProvider } from '@/lib/ai-models'
 
@@ -20,7 +21,6 @@ export function AiModelPicker({ apiKey, baseUrl, model, disabled, onBaseUrlChang
   const inferredProvider = inferAiProvider(baseUrl)
   const [provider, setProvider] = useState<AiProvider>(inferredProvider)
   const [models, setModels] = useState<AiModelOption[]>(() => readCachedModels(inferredProvider, baseUrl)?.models ?? AI_PROVIDER_DEFAULTS[inferredProvider].models)
-  const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
 
@@ -34,10 +34,6 @@ export function AiModelPicker({ apiKey, baseUrl, model, disabled, onBaseUrlChang
 
   const selected = models.find((item) => item.id === model)
   const providerDefinition = AI_PROVIDER_DEFAULTS[provider]
-  const visibleModels = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    return (needle ? models.filter((item) => `${item.name} ${item.id}`.toLowerCase().includes(needle)) : models).slice(0, 80)
-  }, [models, query])
 
   function changeProvider(value: AiProvider) {
     setProvider(value)
@@ -45,7 +41,6 @@ export function AiModelPicker({ apiKey, baseUrl, model, disabled, onBaseUrlChang
     onBaseUrlChange(defaults.baseUrl)
     onModelChange('')
     setModels(readCachedModels(value, defaults.baseUrl)?.models ?? defaults.models)
-    setQuery('')
     setMessage(null)
   }
 
@@ -102,22 +97,21 @@ export function AiModelPicker({ apiKey, baseUrl, model, disabled, onBaseUrlChang
           <p className="text-xs text-muted-foreground">Filled automatically for known providers. Custom endpoints remain editable.</p>
         </div>
       </div>
-      <div className="flex gap-2">
-        <div className="relative flex-1">
-          <MagnifyingGlass className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-          <Input aria-label="Filter discovered models" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter discovered models" className="pl-9" disabled={disabled} />
+      <div className="flex min-w-0 gap-2">
+        <div className="min-w-0 flex-1">
+          <AiModelBrowser
+            provider={provider}
+            models={models}
+            model={model}
+            disabled={disabled}
+            onModelChange={onModelChange}
+          />
         </div>
         <Button type="button" variant="outline" onClick={refreshModels} disabled={disabled || loading} title="Load models from provider">
           <ArrowsClockwise className={loading ? 'animate-spin' : ''} />
           <span className="sr-only">Load models from provider</span>
         </Button>
       </div>
-      {visibleModels.length > 0 && (
-        <Select value={models.some((item) => item.id === model) ? model : undefined} onValueChange={onModelChange} disabled={disabled}>
-          <SelectTrigger><SelectValue placeholder="Choose a discovered or recommended model" /></SelectTrigger>
-          <SelectContent>{visibleModels.map((item) => <SelectItem key={item.id} value={item.id}>{item.name} ({item.id})</SelectItem>)}</SelectContent>
-        </Select>
-      )}
       <div className="space-y-2">
         <Label htmlFor="ai-model-id">Model id</Label>
         <Input id="ai-model-id" value={model} onChange={(event) => onModelChange(event.target.value)} placeholder="Exact provider model id" disabled={disabled} />

@@ -4,9 +4,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
-import type { PrintSettings, CardTheme, DuplexMode, CardType, CardsPerPage, Orientation, PaperSize } from '@/lib/types'
-import { DESIGN_PRESETS } from '@/lib/design-presets'
-import { Palette, TextAlignCenter, TextAlignLeft, TextAlignRight, ArrowsCounterClockwise, Cards } from '@phosphor-icons/react'
+import type { PrintSettings, DuplexMode, CardType, CardsPerPage, Orientation, PaperSize } from '@/lib/types'
+import { DESIGN_PRESETS, getActiveDesignPreset } from '@/lib/design-presets'
+import type { DesignPreset } from '@/lib/design-presets'
+import { Palette, TextAlignCenter, TextAlignLeft, TextAlignRight, ArrowsCounterClockwise, Cards, Check } from '@phosphor-icons/react'
+import { toast } from 'sonner'
 
 interface DesignPanelProps {
   settings: PrintSettings
@@ -15,18 +17,6 @@ interface DesignPanelProps {
   onUpdateCardType: (cardType: CardType) => void
   onResetToDefaults: () => void
 }
-
-const CARD_THEMES: { value: CardTheme; label: string; description: string }[] = [
-  { value: 'teacher-pro', label: 'Teacher Pro', description: 'Clean blue editorial styling' },
-  { value: 'minimal', label: 'Minimal', description: 'Quiet modern neutral' },
-  { value: 'classroom-cute', label: 'Classroom Cute', description: 'Warm and friendly' },
-  { value: 'bold-vocabulary', label: 'Bold Vocabulary', description: 'High-energy contrast' },
-  { value: 'picture-focus', label: 'Picture Focus', description: 'Let visuals lead' },
-  { value: 'quiz-card', label: 'Quiz Card', description: 'Structured assessment look' },
-  { value: 'playful-pop', label: 'Playful Pop', description: 'Bright kid-friendly palette' },
-  { value: 'calm-study', label: 'Calm Study', description: 'Soft green focus mode' },
-  { value: 'ink-saver', label: 'Ink Saver', description: 'Economical for classroom printing' },
-]
 
 const FONT_FAMILIES = [
   { value: 'Inter', label: 'Inter (Body)' },
@@ -47,7 +37,65 @@ const COLOR_SCHEMES = [
 
 const CARDS_PER_PAGE_OPTIONS: CardsPerPage[] = [1, 2, 4, 6, 8, 9, 10, 12]
 
+const PREVIEW_BACKGROUNDS: Record<string, string> = {
+  'teacher-pro': '#eff6ff',
+  'classroom-cute': '#fff7ed',
+  'picture-focus': '#e5e7eb',
+  'quiz-card': '#f8fafc',
+  'bold-vocabulary': '#fef2f2',
+  'ink-saver': '#ffffff',
+}
+
+function StylePreview({ item }: { item: DesignPreset }) {
+  const style = item.updates
+  const imageHeight = `${Math.round(Math.min(style.imageHeightRatio, 0.72) * 100)}%`
+  const alignItems = style.textAlignment === 'left' ? 'flex-start' : style.textAlignment === 'right' ? 'flex-end' : 'center'
+
+  return (
+    <div
+      aria-hidden="true"
+      className="relative flex aspect-[5/3] w-full flex-col overflow-hidden bg-white p-2"
+      style={{
+        backgroundColor: PREVIEW_BACKGROUNDS[style.theme] ?? '#ffffff',
+        borderColor: style.mainColor,
+        borderStyle: style.showBorder ? 'solid' : 'none',
+        borderWidth: style.showBorder ? `${Math.min(style.borderThickness, 3)}px` : 0,
+        borderRadius: style.showRoundedCorners ? `${Math.min(style.cornerRadius, 12)}px` : 0,
+        fontFamily: style.fontFamily,
+      }}
+    >
+      <div className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: style.accentColor }} />
+      {style.imageFit === 'background' ? (
+        <>
+          <div className="absolute inset-0 opacity-45" style={{ backgroundColor: style.accentColor }} />
+          <div className="relative mt-auto space-y-1 rounded-sm bg-white/90 p-2">
+            <div className="h-2 w-3/4 rounded-sm" style={{ backgroundColor: style.mainColor }} />
+            <div className="h-1.5 w-1/2 rounded-sm" style={{ backgroundColor: style.accentColor }} />
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="mt-1 w-full rounded-sm border border-black/10 bg-white/80" style={{ height: imageHeight }}>
+            <div className="m-auto h-full max-h-12 w-2/3 opacity-35" style={{ backgroundColor: style.accentColor }} />
+          </div>
+          <div className="mt-2 flex flex-1 flex-col justify-center gap-1" style={{ alignItems }}>
+            <div className="h-2 w-3/4 rounded-sm" style={{ backgroundColor: style.mainColor }} />
+            <div className="h-1.5 w-1/2 rounded-sm" style={{ backgroundColor: style.accentColor }} />
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType, onResetToDefaults }: DesignPanelProps) {
+  const activePreset = getActiveDesignPreset(settings)
+
+  function applyPreset(item: DesignPreset) {
+    onUpdate(item.updates)
+    toast.success(`${item.name} applied`)
+  }
+
   return (
     <div className="space-y-6">
       <Card className="border-2">
@@ -132,47 +180,61 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType, on
         <CardHeader className="bg-muted/30">
           <CardTitle className="flex items-center gap-2">
             <Palette className="w-5 h-5" weight="duotone" />
-            Card Style & Theme
+            Card Style
           </CardTitle>
-          <CardDescription>Choose a visual style for your flashcards</CardDescription>
+          <CardDescription>Choose a complete style for a specific classroom task</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-6 pt-6">
+        <CardContent className="space-y-4 pt-6">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Label>Style gallery</Label>
+            <span className="rounded border border-border bg-muted px-2 py-1 text-xs font-medium">
+              {activePreset?.name ?? 'Customized'}
+            </span>
+          </div>
           <div className="space-y-3">
-            <Label>Printable presets</Label>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {DESIGN_PRESETS.map((item) => (
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => onUpdate(item.updates)}
-                  className="min-h-11 rounded-lg border-2 border-border p-3 text-left transition-colors hover:border-primary/50"
-                >
-                  <div className="text-sm font-semibold">{item.name}</div>
-                  <div className="text-xs text-muted-foreground">{item.description}</div>
-                </button>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground">Presets change appearance only. Paper, card count, duplex alignment, and offsets stay unchanged.</p>
-          </div>
-
-          <div className="space-y-3">
-            <Label>Theme</Label>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {CARD_THEMES.map((theme) => (
-                <button
-                  key={theme.value}
-                  onClick={() => onUpdate({ theme: theme.value })}
-                  className={`p-4 rounded-lg border-2 text-left transition-all hover:shadow-md ${
-                    settings.theme === theme.value ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'
+                  onClick={() => applyPreset(item)}
+                  aria-pressed={activePreset?.id === item.id}
+                  className={`relative min-h-11 rounded-md border-2 p-3 text-left transition-colors hover:border-primary/60 ${
+                    activePreset?.id === item.id ? 'border-primary bg-primary/5' : 'border-border'
                   }`}
                 >
-                  <div className="font-semibold text-sm mb-1">{theme.label}</div>
-                  <div className="text-xs text-muted-foreground">{theme.description}</div>
+                  <StylePreview item={item} />
+                  <div className="mt-3 flex items-start justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-semibold">{item.name}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{item.description}</div>
+                    </div>
+                    {activePreset?.id === item.id && (
+                      <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground" title="Selected style">
+                        <Check aria-hidden="true" weight="bold" />
+                        <span className="sr-only">Selected</span>
+                      </span>
+                    )}
+                  </div>
                 </button>
               ))}
             </div>
+            <p className="text-xs text-muted-foreground">Styles change card appearance only. Paper, card count, duplex alignment, and offsets stay unchanged.</p>
           </div>
+        </CardContent>
+      </Card>
 
+      <div>
+        <h3 className="text-base font-semibold">Customize selected style</h3>
+        <p className="text-sm text-muted-foreground">Fine-tune colors, typography, borders, alignment, and image balance. Any change shows the style as Customized.</p>
+      </div>
+
+      <Card className="border-2">
+        <CardHeader className="bg-muted/30">
+          <CardTitle>Colors</CardTitle>
+          <CardDescription>Choose a palette or set exact card colors</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6 pt-6">
           <div className="space-y-3">
             <Label>Color Scheme</Label>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -232,6 +294,48 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType, on
               </div>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-2">
+        <CardHeader className="bg-muted/30">
+          <CardTitle>Image Settings</CardTitle>
+          <CardDescription>Control image treatment within the selected style</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6 pt-6">
+          <div className="space-y-2">
+            <Label htmlFor="image-fit">Image Fit</Label>
+            <Select value={settings.imageFit} onValueChange={(value: PrintSettings['imageFit']) => onUpdate({ imageFit: value })}>
+              <SelectTrigger id="image-fit">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="cover">Cover (fill space)</SelectItem>
+                <SelectItem value="contain">Contain (fit within)</SelectItem>
+                <SelectItem value="center">Center (manual zoom friendly)</SelectItem>
+                <SelectItem value="background">Background (full card)</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {settings.imageFit === 'background'
+                ? 'Background mode fills the entire card with the image. Text overlays on a gradient for readability.'
+                : 'Per-card image zoom works in cover, contain, and center modes. Center still gives the most manual positioning control.'}
+            </p>
+          </div>
+          {settings.imageFit !== 'background' && (
+            <div className="space-y-2">
+              <Label>Image Size Ratio: {Math.round(settings.imageHeightRatio * 100)}%</Label>
+              <Slider
+                value={[settings.imageHeightRatio]}
+                onValueChange={([value]) => onUpdate({ imageHeightRatio: value })}
+                min={0.2}
+                max={0.95}
+                step={0.05}
+                className="py-4"
+              />
+              <p className="text-xs text-muted-foreground">Controls how much vertical space images take vs. text. Lower values leave more room for text.</p>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -389,48 +493,6 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType, on
               </div>
             </div>
           </div>
-        </CardContent>
-      </Card>
-
-      <Card className="border-2">
-        <CardHeader className="bg-muted/30">
-          <CardTitle>Image Settings</CardTitle>
-          <CardDescription>Control how images are displayed</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6 pt-6">
-          <div className="space-y-2">
-            <Label htmlFor="image-fit">Image Fit</Label>
-            <Select value={settings.imageFit} onValueChange={(value: PrintSettings['imageFit']) => onUpdate({ imageFit: value })}>
-              <SelectTrigger id="image-fit">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="cover">Cover (fill space)</SelectItem>
-                <SelectItem value="contain">Contain (fit within)</SelectItem>
-                <SelectItem value="center">Center (manual zoom friendly)</SelectItem>
-                <SelectItem value="background">Background (full card)</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              {settings.imageFit === 'background'
-                ? 'Background mode fills the entire card with the image. Text overlays on a gradient for readability.'
-                : 'Per-card image zoom works in cover, contain, and center modes. Center still gives the most manual positioning control.'}
-            </p>
-          </div>
-          {settings.imageFit !== 'background' && (
-            <div className="space-y-2">
-              <Label>Image Size Ratio: {Math.round(settings.imageHeightRatio * 100)}%</Label>
-              <Slider
-                value={[settings.imageHeightRatio]}
-                onValueChange={([value]) => onUpdate({ imageHeightRatio: value })}
-                min={0.2}
-                max={0.95}
-                step={0.05}
-                className="py-4"
-              />
-              <p className="text-xs text-muted-foreground">Controls how much vertical space images take vs. text. Lower values leave more room for text.</p>
-            </div>
-          )}
         </CardContent>
       </Card>
 

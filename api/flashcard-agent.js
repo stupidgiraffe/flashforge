@@ -323,9 +323,22 @@ export function extractProviderErrorDetail(detail) {
   return raw.replace(/\s+/g, ' ').slice(0, 300)
 }
 
+export function isContextLimitError(detail) {
+  const lower = extractProviderErrorDetail(detail).toLowerCase()
+  return [
+    'context_length_exceeded',
+    'maximum context length',
+    'prompt too large',
+    'too many tokens',
+    'input exceeds context',
+    'request exceeds context window',
+  ].some((pattern) => lower.includes(pattern))
+}
+
 export function classifyAiError(status, detail) {
   const providerDetail = extractProviderErrorDetail(detail)
   const lower = providerDetail.toLowerCase()
+  if (isContextLimitError(detail)) return 'AI request exceeds the model context window'
   if (status === 401) return 'AI authentication failed (401) — check your API key'
   if (status === 403) return 'AI access denied (403) — check your API key permissions'
   if (status === 429) return 'AI rate limit reached (429) — try again in a moment'
@@ -461,13 +474,23 @@ async function completeCards({ aiApiKey, aiBaseUrl, aiModel, mode, title, instru
           lastError = agentError(msg, response.status === 429 ? 'AI_RATE_LIMIT' : 'AI_PROVIDER_SERVER_ERROR', response.status, 'Try again in a moment.', extractProviderErrorDetail(detail))
           continue
         }
-        const code = response.status === 401 ? 'AI_AUTH_FAILED'
+        const contextLimit = isContextLimitError(detail)
+        const code = contextLimit ? 'AI_CONTEXT_LIMIT'
+          : response.status === 401 ? 'AI_AUTH_FAILED'
           : response.status === 403 ? 'AI_ACCESS_DENIED'
             : response.status === 404 ? 'AI_ENDPOINT_OR_MODEL_NOT_FOUND'
               : response.status === 429 ? 'AI_RATE_LIMIT'
                 : response.status === 400 ? 'AI_BAD_REQUEST'
                   : 'AI_PROVIDER_ERROR'
-        throw agentError(msg, code, response.status, 'Check your AI key, model, base URL, and provider account.', extractProviderErrorDetail(detail))
+        throw agentError(
+          msg,
+          code,
+          response.status,
+          contextLimit
+            ? 'Continue with FlashForge automatic small batches, shorten the revision feedback, or choose a model with a larger context window.'
+            : 'Check your AI key, model, base URL, and provider account.',
+          contextLimit ? undefined : extractProviderErrorDetail(detail),
+        )
       }
 
       let data
