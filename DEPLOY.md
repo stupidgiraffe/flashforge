@@ -1,232 +1,130 @@
 # Deploying FlashForge to Vercel
 
-This guide walks you through deploying FlashForge to Vercel in under 5 minutes.
+FlashForge can be deployed as a Vite application with Vercel-compatible serverless functions.
 
 ## Prerequisites
 
-- A [GitHub](https://github.com) account
-- A [Vercel](https://vercel.com) account (free tier is perfect)
-- Your FlashForge code pushed to a GitHub repository
+- A GitHub account
+- A Vercel account
+- A fork or clone of this repository
 
-## Method 1: Deploy via Vercel Dashboard (Recommended)
+## Deploy from the Vercel dashboard
 
-This is the easiest method - no CLI required.
+1. Push your copy of FlashForge to GitHub.
+2. In Vercel, create a new project and import the repository.
+3. Confirm the detected Vite settings:
+   - Build command: `npm run build`
+   - Output directory: `dist`
+   - Install command: `npm install`
+4. Add any optional provider credentials under **Project Settings → Environment Variables**.
+5. Deploy.
 
-### Step 1: Push to GitHub
+The core editor can run without provider credentials. AI-assisted deck creation and credential-backed image search require the corresponding serverless routes and provider configuration.
+
+## Environment variables
+
+Use `.env.example` as the source of truth.
+
+```dotenv
+BRAVE_API_KEY=
+PIXABAY_API_KEY=
+PEXELS_API_KEY=
+GOOGLE_API_KEY=
+GOOGLE_CX=
+
+# Optional server-side default AI provider
+# AI_API_KEY=
+# AI_BASE_URL=https://api.openai.com/v1
+# AI_MODEL=gpt-4o-mini
+```
+
+All values are optional. Openverse remains available without credentials.
+
+Do not commit populated `.env` or `.env.local` files. Configure production secrets in Vercel rather than placing them in the repository.
+
+## Deploy with the Vercel CLI
 
 ```bash
-# Initialize git (if not already done)
-git init
-git add .
-git commit -m "Initial commit"
+npm install
+npm run lint
+npm run build
+npm test
 
-# Create a new repository on GitHub, then:
-git remote add origin https://github.com/your-username/flashforge.git
-git push -u origin main
+npx vercel
 ```
 
-### Step 2: Import to Vercel
-
-1. Go to [vercel.com](https://vercel.com)
-2. Click **"Add New..."** → **"Project"**
-3. Click **"Import Git Repository"**
-4. Select your FlashForge repository
-5. Vercel will automatically detect it's a Vite project
-6. Click **"Deploy"**
-
-That's it! Your app will be live at `your-project-name.vercel.app` in about 60 seconds.
-
-### Step 3: Configure Custom Domain (Optional)
-
-1. In your Vercel project dashboard, go to **Settings** → **Domains**
-2. Add your custom domain
-3. Follow the DNS configuration instructions
-4. Wait for DNS propagation (usually 5-30 minutes)
-
-## Method 2: Deploy via Vercel CLI
-
-If you prefer the command line:
-
-### Step 1: Install Vercel CLI
+To deploy the selected project to production:
 
 ```bash
-npm i -g vercel
+npx vercel --prod
 ```
 
-### Step 2: Deploy
+Using `npx` avoids requiring a global Vercel CLI installation.
+
+## Local verification
+
+Run the same checks expected by CI before deployment:
 
 ```bash
-# Login to Vercel
-vercel login
-
-# Deploy (follow the prompts)
-vercel
-
-# Or deploy directly to production
-vercel --prod
+npm install
+npm run lint
+npm run build
+npm test
 ```
 
-## Method 3: Deploy Button
+Start the development environment with:
 
-Add this to your GitHub README to let others deploy with one click:
-
-```markdown
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/your-username/flashforge)
+```bash
+npm run dev
 ```
 
-## Configuration
+For a production-style local preview:
 
-### Build Settings (Auto-Detected)
+```bash
+npm run build
+npm run preview
+```
 
-Vercel will automatically use these settings:
+## Automatic deployments
 
-- **Framework**: Vite
-- **Build Command**: `npm run build`
-- **Output Directory**: `dist`
-- **Install Command**: `npm install`
-
-### Environment Variables
-
-FlashForge doesn't need any environment variables for basic functionality. Everything runs client-side with localStorage.
-
-If you add authentication or cloud features later, you can add environment variables in:
-**Project Settings** → **Environment Variables**
-
-## Automatic Deployments
-
-Once connected to GitHub, Vercel will:
-
-- ✅ Deploy every push to `main` branch (production)
-- ✅ Create preview deployments for pull requests
-- ✅ Run build checks before deploying
-- ✅ Provide deployment URLs for testing
-
-## Vercel Edge Network
-
-Your app will be served from Vercel's global Edge Network, providing:
-
-- 🌍 Fast loading worldwide
-- 🔒 Automatic HTTPS
-- 💨 Compressed assets
-- 🔄 Instant cache invalidation
-
-## Monitoring & Analytics
-
-Enable Vercel Analytics for insights:
-
-1. Go to your project dashboard
-2. Click **"Analytics"** tab
-3. Enable Vercel Analytics
-4. Get insights on page views, performance, and Web Vitals
+When the Vercel project is connected to GitHub, Vercel can create production deployments from the configured production branch and preview deployments for pull requests. Exact behavior depends on the project's Git and deployment settings.
 
 ## Troubleshooting
 
-### Build Failed
+### Build failure
 
-If the build fails on Vercel:
+- Reproduce the failure with `npm run build` locally.
+- Confirm the deployment uses a supported Node.js version.
+- Check that `package-lock.json` is committed and current.
+- Review the Vercel build log for the first actual error rather than later cascading failures.
 
-1. Check that `npm run build` works locally
-2. Ensure all dependencies are in `package.json` (not just `devDependencies`)
-3. Check the build logs in Vercel dashboard for specific errors
+### API route failure
 
-### 404 on Routes
+- Confirm the route exists under `api/`.
+- Verify required provider credentials are configured in the correct Vercel environment.
+- Check function logs for provider authentication, rate-limit, timeout, or response-format errors.
+- Confirm `vercel.json` still includes the required serverless-function settings.
 
-If you see 404 errors:
-- This shouldn't happen with FlashForge since it's a single-page app
-- If you add routing later, create a `vercel.json`:
+### AI provider failure
 
-```json
-{
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/index.html"
-    }
-  ]
-}
-```
+- Verify the OpenAI-compatible base URL and model name.
+- Confirm the selected provider accepts the expected chat-completions request format.
+- Check whether the provider returned an authentication error, rate limit, refusal, timeout, or unsupported response shape.
 
-### Fonts Not Loading
+### Image search failure
 
-If custom fonts aren't loading:
-- Ensure font files are in the `public` folder or loaded from Google Fonts
-- Check that paths are relative (not absolute)
-- Verify CORS headers if loading from external source
+- Confirm at least one credential-backed provider is configured, or allow Openverse fallback.
+- Verify API-key restrictions and quotas with the provider.
+- Check whether the remote image host blocks embedding or hotlink access.
 
-## Performance Tips
+### Browser data appears missing
 
-### Optimize Images
+FlashForge stores decks by site origin and browser profile. A preview deployment, production deployment, custom domain, and localhost are separate storage locations. Export a backup before changing domains or clearing browser data.
 
-Before deploying, optimize any images:
-- Use WebP format for photos
-- Compress to 80% quality
-- Resize to max display dimensions
+## Dependency policy
 
-### Enable Compression
+Dependabot intentionally avoids unsupported major ESLint upgrades while the installed React Hooks ESLint plugin requires the current major line. Revisit the ignore rule once the dependency ecosystem supports the newer ESLint major version.
 
-Vercel automatically compresses assets, but you can optimize further:
-- Remove unused dependencies
-- Code-split large libraries
-- Use dynamic imports for heavy components
+## Hosting costs and limits
 
-## Custom Configuration (Optional)
-
-Create `vercel.json` in your project root for advanced configuration:
-
-```json
-{
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
-  "framework": "vite",
-  "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [
-        {
-          "key": "X-Content-Type-Options",
-          "value": "nosniff"
-        },
-        {
-          "key": "X-Frame-Options",
-          "value": "DENY"
-        },
-        {
-          "key": "X-XSS-Protection",
-          "value": "1; mode=block"
-        }
-      ]
-    }
-  ]
-}
-```
-
-## Cost
-
-**FlashForge on Vercel is FREE** for:
-- Unlimited personal projects
-- 100 GB bandwidth per month
-- 100 build hours per month
-- Automatic HTTPS
-- Global CDN
-
-This is more than enough for classroom use.
-
-## Dependency Notes
-
-### ESLint major version updates are intentionally ignored
-
-Dependabot is configured (`.github/dependabot.yml`) to skip major version bumps for `eslint` and `eslint-plugin-react-hooks`. This prevents automated PRs that would bump ESLint from v9 to v10+ while `eslint-plugin-react-hooks` still only supports up to ESLint v9. Such a bump causes `npm install` to fail with an `ERESOLVE` peer dependency conflict, breaking Vercel builds.
-
-When `eslint-plugin-react-hooks` (or other ESLint plugins) officially support ESLint v10+, you can remove the ignore rules from `.github/dependabot.yml` and upgrade manually.
-
-## Support
-
-- [Vercel Documentation](https://vercel.com/docs)
-- [Vite Deployment Guide](https://vitejs.dev/guide/static-deploy.html)
-- [Vercel Support](https://vercel.com/support)
-
----
-
-**🎉 Your flashcard app is now live and accessible to anyone!**
-
-Share the URL with fellow teachers or use it for your own classroom materials.
+Hosting plans, quotas, and serverless limits can change. Check the current Vercel plan documentation for bandwidth, build, function-duration, and commercial-use terms before relying on a particular quota.

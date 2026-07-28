@@ -1,31 +1,33 @@
-Thanks for helping make GitHub safe for everyone.
+# Security Policy
 
-# Security
+## Reporting a vulnerability
 
-GitHub takes the security of our software products and services seriously, including all of the open source code repositories managed through our GitHub organizations, such as [GitHub](https://github.com/GitHub).
+Please do not open a public GitHub issue for a suspected security vulnerability, exposed credential, or privacy problem.
 
-Even though [open source repositories are outside of the scope of our bug bounty program](https://bounty.github.com/index.html#scope) and therefore not eligible for bounty rewards, we will ensure that your finding gets passed along to the appropriate maintainers for remediation. 
+Use GitHub's private vulnerability reporting feature for this repository when it is available. If private reporting is unavailable, contact the repository owner through their GitHub profile and provide only enough public information to establish a private communication channel.
 
-## Reporting Security Issues
+Include:
 
-If you believe you have found a security vulnerability in any GitHub-owned repository, please report it to us through coordinated disclosure.
+- the affected component or endpoint;
+- steps to reproduce the issue;
+- the potential impact;
+- any suggested mitigation;
+- whether credentials or personal data may have been exposed.
 
-**Please do not report security vulnerabilities through public GitHub issues, discussions, or pull requests.**
+Do not include live API keys, access tokens, private user data, or exploit details in a public issue.
 
-Instead, please send an email to opensource-security[@]github.com.
+## Scope
 
-Please include as much of the information listed below as you can to help us better understand and resolve the issue:
+Security reports are especially useful for issues involving:
 
-  * The type of issue (e.g., buffer overflow, SQL injection, or cross-site scripting)
-  * Full paths of source file(s) related to the manifestation of the issue
-  * The location of the affected source code (tag/branch/commit or direct URL)
-  * Any special configuration required to reproduce the issue
-  * Step-by-step instructions to reproduce the issue
-  * Proof-of-concept or exploit code (if possible)
-  * Impact of the issue, including how an attacker might exploit the issue
+- exposure or unintended forwarding of BYOK credentials;
+- server environment-variable leakage;
+- cross-site scripting or unsafe rendered content;
+- unauthorized Google Drive access;
+- server-side request forgery or unsafe remote image fetching;
+- dependency vulnerabilities with a demonstrated impact on FlashForge;
+- accidental disclosure of locally stored deck data.
 
-This information will help us triage your report more quickly.
+## Supported version
 
-## Policy
-
-See [GitHub's Safe Harbor Policy](https://docs.github.com/en/site-policy/security-policies/github-bug-bounty-program-legal-safe-harbor#1-safe-harbor-terms)
+Security fixes are applied to the current `main` branch. The project does not currently maintain separate long-term-support release branches.
