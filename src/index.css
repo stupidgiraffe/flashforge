@@ -109,8 +109,18 @@
   --radius-full: 9999px;
 }
 
+/*
+ * Keep the print portal laid out off-screen instead of display:none.
+ * PlacedImage measures its frame with ResizeObserver; display:none gives it
+ * a permanent 0x0 frame until the browser is already entering print mode,
+ * which can make images invisible in the print snapshot.
+ */
 .print-only {
-  display: none;
+  position: fixed;
+  top: 0;
+  left: -100000px;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 @media print {
@@ -157,6 +167,11 @@
   
   .print-only {
     display: block !important;
+    position: static !important;
+    top: auto !important;
+    left: auto !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
   }
   
   .page-break-after {
