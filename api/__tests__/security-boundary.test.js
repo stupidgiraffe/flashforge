@@ -78,8 +78,11 @@ describe('outbound provider URL validation', () => {
     '198.51.100.1',
     '203.0.113.1',
     '::1',
+    '::ffff:127.0.0.1',
+    '::ffff:7f00:1',
     'fd00::1',
     'fe80::1',
+    'fec0::1',
     '2001:db8::1',
   ])('blocks private or reserved address %s', (address) => {
     expect(isBlockedIp(address)).toBe(true)
@@ -87,12 +90,15 @@ describe('outbound provider URL validation', () => {
 
   it('does not classify ordinary public addresses as private', () => {
     expect(isBlockedIp('8.8.8.8')).toBe(false)
+    expect(isBlockedIp('192.0.8.1')).toBe(false)
     expect(isBlockedIp('2606:4700:4700::1111')).toBe(false)
   })
 
-  it('blocks localhost-style hostnames', () => {
+  it('blocks localhost and private naming conventions', () => {
     expect(isBlockedHostname('localhost')).toBe(true)
     expect(isBlockedHostname('service.local')).toBe(true)
+    expect(isBlockedHostname('service.internal')).toBe(true)
+    expect(isBlockedHostname('home.arpa')).toBe(true)
     expect(isBlockedHostname('metadata.google.internal')).toBe(true)
   })
 
@@ -105,6 +111,12 @@ describe('outbound provider URL validation', () => {
   it('rejects a public-looking hostname that resolves privately', async () => {
     const lookup = vi.fn().mockResolvedValue([{ address: '10.0.0.8', family: 4 }])
     await expect(assertSafeExternalUrl('https://provider.example/v1', { lookup })).rejects.toThrow(/private or reserved/)
+  })
+
+  it('rejects query strings and fragments in provider base URLs', async () => {
+    const lookup = vi.fn().mockResolvedValue([{ address: '8.8.8.8', family: 4 }])
+    await expect(assertSafeExternalUrl('https://provider.example/v1?token=abc', { lookup })).rejects.toThrow(/query string/)
+    await expect(assertSafeExternalUrl('https://provider.example/v1#fragment', { lookup })).rejects.toThrow(/fragment/)
   })
 
   it('allows localhost HTTP only when local development is explicitly enabled', async () => {
