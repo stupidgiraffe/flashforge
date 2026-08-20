@@ -16,9 +16,6 @@ const defaultTheme = {
   container: {
     center: true,
     padding: "2rem",
-    // Keep raw input-mode/PWA media queries out of container max-width generation.
-    // Without explicit width screens Tailwind can treat `(pointer: coarse)` and
-    // `(display-mode: standalone)` as widths and emit invalid CSS.
     screens: {
       sm: "640px",
       md: "768px",
@@ -28,11 +25,6 @@ const defaultTheme = {
     },
   },
   extend: {
-    screens: {
-      coarse: { raw: "(pointer: coarse)" },
-      fine: { raw: "(pointer: fine)" },
-      pwa: { raw: "(display-mode: standalone)" },
-    },
     colors: {
       neutral: {
         1: "var(--color-neutral-1)",
