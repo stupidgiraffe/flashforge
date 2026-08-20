@@ -36,7 +36,6 @@ export function isBlockedIp(address) {
       (a === 192 && b === 0) ||
       (a === 192 && b === 168) ||
       (a === 198 && (b === 18 || b === 19)) ||
-      (a === 192 && b === 0 && parts[2] === 2) ||
       (a === 198 && b === 51 && parts[2] === 100) ||
       (a === 203 && b === 0 && parts[2] === 113) ||
       a >= 224
@@ -47,7 +46,7 @@ export function isBlockedIp(address) {
   if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true
   if (/^fe[89ab]/.test(normalized)) return true
   if (normalized.startsWith('ff')) return true
-  if (normalized.startsWith('2001:db8:')) return true
+  if (normalized === '2001:db8' || normalized.startsWith('2001:db8:')) return true
 
   const mapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
   return mapped ? isBlockedIp(mapped[1]) : false
@@ -91,6 +90,28 @@ export async function assertSafeExternalUrl(rawUrl, {
   if (addresses.some(({ address }) => isBlockedIp(address))) throw new Error('Provider hostname resolves to a private or reserved address')
 
   return url
+}
+
+export async function safeExternalFetch(rawUrl, init = {}, {
+  allowLocalDevelopment = false,
+  lookup = dns.lookup,
+  maxRedirects = 4,
+} = {}) {
+  let current = String(rawUrl || '')
+  const method = String(init.method || 'GET').toUpperCase()
+
+  for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
+    const url = await assertSafeExternalUrl(current, { allowLocalDevelopment, lookup })
+    const response = await fetch(url, { ...init, redirect: 'manual' })
+    const isRedirect = response.status >= 300 && response.status < 400
+    const location = response.headers.get('location')
+    if (!isRedirect || !location) return response
+    if (method !== 'GET' && method !== 'HEAD') throw new Error('Provider redirects are not allowed for this request')
+    if (redirectCount === maxRedirects) throw new Error('Too many redirects')
+    current = new URL(location, url).toString()
+  }
+
+  throw new Error('Too many redirects')
 }
 
 export function allowLocalProviderDevelopment() {
