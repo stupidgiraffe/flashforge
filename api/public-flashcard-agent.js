@@ -2,6 +2,7 @@ import { Readable } from 'node:stream'
 import { z } from 'zod'
 import agentHandler from './flashcard-agent.js'
 import { assertSafeExternalUrl, allowLocalProviderDevelopment } from './_network-safety.js'
+import { withSafeOutboundFetch } from './_safe-fetch-context.js'
 import { RequestValidationError, createSanitizedJsonResponse, readJsonBody, writeRequestError } from './_request.js'
 
 const optionalRemoteUrl = z.string().max(4096).optional().transform((value) => {
@@ -54,10 +55,12 @@ export default async function handler(req, res) {
   const { requestId } = createSanitizedJsonResponse(res)
   try {
     const body = await readJsonBody(req, requestSchema)
-    await assertSafeExternalUrl(body.aiBaseUrl, {
-      allowLocalDevelopment: allowLocalProviderDevelopment(),
-    })
-    return agentHandler(syntheticJsonRequest(req, body), res)
+    const allowLocalDevelopment = allowLocalProviderDevelopment()
+    await assertSafeExternalUrl(body.aiBaseUrl, { allowLocalDevelopment })
+    return withSafeOutboundFetch(
+      () => agentHandler(syntheticJsonRequest(req, body), res),
+      { allowLocalDevelopment },
+    )
   } catch (error) {
     if (error instanceof RequestValidationError) return writeRequestError(res, error, requestId)
     return writeRequestError(res, new RequestValidationError(
