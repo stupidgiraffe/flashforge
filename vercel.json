@@ -10,6 +10,14 @@
   },
   "rewrites": [
     {
+      "source": "/api/flashcard-agent",
+      "destination": "/api/public-flashcard-agent"
+    },
+    {
+      "source": "/api/image-search",
+      "destination": "/api/public-image-search"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/$1"
     },
