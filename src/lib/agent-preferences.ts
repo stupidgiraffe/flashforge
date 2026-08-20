@@ -124,7 +124,7 @@ export function acceptImageRisk(storage?: Storage): void {
 }
 
 export function shouldRememberAiKey(storage?: Storage): boolean {
-  return safeGet(resolveStorage(storage), REMEMBER_KEY) !== 'false'
+  return safeGet(resolveStorage(storage), REMEMBER_KEY) === 'true'
 }
 
 export function setRememberAiKey(remember: boolean, storage?: Storage): void {
