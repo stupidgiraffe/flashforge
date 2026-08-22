@@ -14,13 +14,28 @@ export interface AgentImageUpdate {
 
 export type AgentMode = 'create' | 'enhance'
 
+export function prependCard(cards: FlashCard[], newCard: FlashCard): FlashCard[] {
+  return [newCard, ...cards]
+}
+
+export function reorderCardsById(cards: FlashCard[], activeId: string, overId: string): FlashCard[] {
+  const oldIndex = cards.findIndex((card) => card.id === activeId)
+  const newIndex = cards.findIndex((card) => card.id === overId)
+  if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return cards
+  const reordered = [...cards]
+  const [moved] = reordered.splice(oldIndex, 1)
+  reordered.splice(newIndex, 0, moved)
+  return reordered
+}
+
 /**
  * Pure helper that merges agent-generated cards and image updates with the
  * existing deck.  Extracted from `runImageAgent` so it can be unit-tested
  * without network access.
  *
  * Phase 1 — card generation:
- *   create:  appends `generatedCards` after `existingCards`
+ *   create:  prepends `generatedCards` before `existingCards` without
+ *            modifying any existing card
  *   enhance: updates matching existing cards with new text
  *
  * Phase 2 — image application:
@@ -54,7 +69,7 @@ export function mergeAgentResults(
       backImageOffsetY: 0,
       imageScale: 1,
     }))
-    workingCards = [...existingCards, ...newCards]
+    workingCards = [...newCards, ...existingCards]
   } else {
     const byId = new Map(generatedCards.map((c) => [c.id, c]))
     workingCards = existingCards.map((card) => {

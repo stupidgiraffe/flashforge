@@ -1,7 +1,11 @@
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Printer, DownloadSimple, UploadSimple, Exam, Image as ImageIcon, Trash, ArrowLeft, DotsThreeVertical, Copy, Sparkle, Stack, CloudArrowUp, CloudArrowDown, LinkSimple, MagnifyingGlass, X, Gear, CheckCircle } from '@phosphor-icons/react'
+import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core'
+import type { DragEndEvent } from '@dnd-kit/core'
+import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { Button } from '@/components/ui/button'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -36,6 +40,7 @@ import { CredentialBackupPanel } from '@/components/CredentialBackupPanel'
 import { DEFAULT_AGENT_DRAFT, acceptImageRisk, clearAgentDraft, clearStoredCredentials, hasAcceptedImageRisk, loadAgentDraft, persistAiKey, saveAgentDraft, setRememberAiKey, shouldRememberAiKey } from '@/lib/agent-preferences'
 import type { AgentDraftPreferences, CredentialBackupPayload, ImageSearchStyleId } from '@/lib/agent-preferences'
 import { IMAGE_SEARCH_STYLES, applyImageSearchStyle, getImageSearchTemplate, previewImageSearch } from '@/lib/image-search-styles'
+import { mergeAgentResults, prependCard, reorderCardsById } from '@/lib/agent-utils'
 
 declare global {
   interface Window {
@@ -864,6 +869,35 @@ function safeUrlHost(value: string): string {
   catch { return 'invalid base URL' }
 }
 
+function SortableCardItem({ id, children }: { id: string; children: ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 20 : undefined,
+  }
+
+  return (
+    <div ref={setNodeRef} style={style} className={isDragging ? 'relative opacity-80' : 'relative'}>
+      <div className="mb-2 flex justify-center">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="touch-none cursor-grab select-none active:cursor-grabbing"
+          aria-label="Drag card to change its position"
+          {...attributes}
+          {...listeners}
+        >
+          <DotsThreeVertical className="mr-1" weight="bold" />
+          Drag to reorder
+        </Button>
+      </div>
+      {children}
+    </div>
+  )
+}
+
 
 function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, googleImageSearchCx, onOpenGoogleSettings }: SetEditorProps) {
   const [showTestDialog, setShowTestDialog] = useState(false)
@@ -935,6 +969,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const [previewContainerWidth, setPreviewContainerWidth] = useState(0)
   const previewObserverRef = useRef<ResizeObserver | null>(null)
+  const cardSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
 
   useEffect(() => {
     setRememberAiKey(rememberAiKeyOnDevice)
@@ -1145,8 +1183,18 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     }
     updateSet(prev => ({
       ...prev,
-      cards: [...prev.cards, newCard],
+      cards: prependCard(prev.cards, newCard),
     }))
+  }
+
+  function reorderCards(event: DragEndEvent) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    setRevisionApplyConflictSummary(null)
+    updateSet(prev => {
+      const cards = reorderCardsById(prev.cards, String(active.id), String(over.id))
+      return cards === prev.cards ? prev : { ...prev, cards }
+    })
   }
 
   function updateCard(id: string, updates: Partial<FlashCard>) {
@@ -2071,31 +2119,12 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         setImageAgentLog((prev) => [...prev, `✓ Generated ${generatedCards.length} card${generatedCards.length === 1 ? '' : 's'}${imageAgentGenerateImages ? ' — now searching for images...' : ' — text saved.'}`])
 
         // Build the working copy from Phase 1 results
-        if (flashcardAgentMode === 'create') {
-          workingCards = [
-            ...set.cards,
-            ...generatedCards.map((card) => ({
-              id: card.id,
-              frontText: card.frontText,
-              backText: card.backText,
-              imagePosition: 'front' as const,
-              frontImageScale: 1,
-              backImageScale: 1,
-              frontImageOffsetX: 0,
-              frontImageOffsetY: 0,
-              backImageOffsetX: 0,
-              backImageOffsetY: 0,
-              imageScale: 1,
-            })),
-          ]
-        } else {
-          const byId = new Map(generatedCards.map((c) => [c.id, c]))
-          workingCards = set.cards.map((card) => {
-            const gen = byId.get(card.id)
-            if (!gen) return card
-            return { ...card, frontText: gen.frontText || card.frontText, backText: gen.backText || card.backText }
-          })
-        }
+        workingCards = mergeAgentResults(
+          set.cards,
+          generatedCards,
+          [],
+          flashcardAgentMode === 'create' ? 'create' : 'enhance',
+        )
 
         hasNewContent = true
         // Persist text-only cards immediately so the user sees progress
@@ -2540,8 +2569,11 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 </CardContent>
               </Card>
 
+              <DndContext sensors={cardSensors} collisionDetection={closestCenter} onDragEnd={reorderCards}>
+                <SortableContext items={set.cards.map((card) => card.id)} strategy={verticalListSortingStrategy}>
               {set.cards.map((card, index) => (
-              <Card key={card.id} className="shadow-md border-2 hover:border-primary/30 transition-colors">
+              <SortableCardItem key={card.id} id={card.id}>
+              <Card className="shadow-md border-2 hover:border-primary/30 transition-colors">
                 <CardHeader className="bg-muted/30">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <label className="flex items-center gap-3">
@@ -2770,7 +2802,10 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                   </div>
                 </CardContent>
               </Card>
+              </SortableCardItem>
               ))}
+                </SortableContext>
+              </DndContext>
             </>
           )}
         </TabsContent>
@@ -3283,19 +3318,27 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               <div className="space-y-2">
                 <Label htmlFor="flashcard-agent-mode">Agent mode</Label>
                 <Select value={flashcardAgentMode} onValueChange={(value) => {
-                  if (!imageAgentLoading && !aiConnectionTestLoading) setFlashcardAgentMode(value as FlashcardAgentMode)
+                  if (!imageAgentLoading && !aiConnectionTestLoading) {
+                    const mode = value as FlashcardAgentMode
+                    setFlashcardAgentMode(mode)
+                    if (mode === 'create') setFlashcardAgentGenerateText(true)
+                  }
                 }}>
                   <SelectTrigger id="flashcard-agent-mode" disabled={imageAgentLoading || aiConnectionTestLoading}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="enhance">Enhance current cards</SelectItem>
-                    <SelectItem value="create">Create new cards</SelectItem>
+                    <SelectItem value="create">Add new cards only</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="flashcard-agent-count">Deck size / new cards</Label>
+                <Label htmlFor="flashcard-agent-count">{flashcardAgentMode === 'create' ? 'New cards to add' : 'Cards to process'}</Label>
                 <Input id="flashcard-agent-count" type="number" min="1" max="60" value={flashcardAgentCount} onChange={(event) => setFlashcardAgentCount(event.target.value)} disabled={imageAgentLoading} />
-                <p className="text-xs text-muted-foreground">Default 8. Max 60 per run (larger = slower).</p>
+                <p className="text-xs text-muted-foreground">
+                  {flashcardAgentMode === 'create'
+                    ? 'New cards are inserted at the top. Existing cards and their content stay unchanged.'
+                    : 'Default 8. Max 60 per run (larger = slower).'}
+                </p>
               </div>
             </div>
 
@@ -3342,8 +3385,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                 <Label>Options</Label>
                 <div className="space-y-2 rounded-md border p-3 text-sm">
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={flashcardAgentGenerateText} disabled={imageAgentLoading || flashcardAgentMode === 'create'} onChange={(event) => setFlashcardAgentGenerateText(event.target.checked)} />
-                    Let AI create/rewrite front and back text
+                    <input type="checkbox" checked={flashcardAgentMode === 'create' || flashcardAgentGenerateText} disabled={imageAgentLoading || flashcardAgentMode === 'create'} onChange={(event) => setFlashcardAgentGenerateText(event.target.checked)} />
+                    {flashcardAgentMode === 'create' ? 'Create text for new cards' : 'Let AI rewrite front and back text'}
                   </label>
                   <label className="flex items-center gap-2">
                     <input type="checkbox" checked={imageAgentGenerateImages} disabled={imageAgentLoading} onChange={(event) => setImageAgentGenerateImages(event.target.checked)} />
