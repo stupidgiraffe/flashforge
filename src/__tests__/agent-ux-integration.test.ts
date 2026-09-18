@@ -24,4 +24,12 @@ describe('BYOK agent UX integration', () => {
     expect(app).toContain('<CredentialBackupPanel')
     expect(app).not.toContain('Search query template')
   })
+
+  it('offers a new-card-only mode and sortable editor cards', () => {
+    expect(app).toContain('Add new cards only')
+    expect(app).toContain('Existing cards and their content stay unchanged.')
+    expect(app).toContain('prependCard(prev.cards, newCard)')
+    expect(app).toContain('<DndContext sensors={cardSensors}')
+    expect(app).toContain('Drag to reorder')
+  })
 })

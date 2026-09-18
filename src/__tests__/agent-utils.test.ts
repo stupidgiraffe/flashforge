@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mergeAgentResults } from '../lib/agent-utils'
+import { mergeAgentResults, prependCard, reorderCardsById } from '../lib/agent-utils'
 import type { FlashCard } from '../lib/types'
 
 // ---------------------------------------------------------------------------
@@ -20,12 +20,40 @@ function makeCard(overrides: Partial<FlashCard> & { id: string; frontText: strin
   }
 }
 
+describe('manual card ordering', () => {
+  it('prepends a manually-created card without changing existing cards', () => {
+    const existing = [makeCard({ id: 'old-1', frontText: 'Old', backText: 'Back' })]
+    const newCard = makeCard({ id: 'new-1', frontText: '', backText: '' })
+    const result = prependCard(existing, newCard)
+
+    expect(result.map((card) => card.id)).toEqual(['new-1', 'old-1'])
+    expect(result[1]).toBe(existing[0])
+  })
+
+  it('moves cards by id without mutating the original order', () => {
+    const cards = [
+      makeCard({ id: 'c1', frontText: 'One', backText: '1' }),
+      makeCard({ id: 'c2', frontText: 'Two', backText: '2' }),
+      makeCard({ id: 'c3', frontText: 'Three', backText: '3' }),
+    ]
+    const result = reorderCardsById(cards, 'c3', 'c1')
+
+    expect(result.map((card) => card.id)).toEqual(['c3', 'c1', 'c2'])
+    expect(cards.map((card) => card.id)).toEqual(['c1', 'c2', 'c3'])
+  })
+
+  it('returns the same array when a drag target is missing', () => {
+    const cards = [makeCard({ id: 'c1', frontText: 'One', backText: '1' })]
+    expect(reorderCardsById(cards, 'c1', 'missing')).toBe(cards)
+  })
+})
+
 // ---------------------------------------------------------------------------
 // create mode
 // ---------------------------------------------------------------------------
 
 describe('mergeAgentResults – create mode', () => {
-  it('appends generated cards to an empty deck', () => {
+  it('adds generated cards to an empty deck', () => {
     const result = mergeAgentResults(
       [],
       [{ id: 'c1', frontText: 'Hello', backText: 'こんにちは' }],
@@ -77,15 +105,16 @@ describe('mergeAgentResults – create mode', () => {
     expect(result[1].frontImageUrl).toBeUndefined()
   })
 
-  it('preserves existing cards alongside generated ones', () => {
+  it('prepends generated cards while preserving existing cards unchanged', () => {
     const existing = [makeCard({ id: 'existing-1', frontText: 'Old', backText: 'Old back' })]
     const generated = [{ id: 'new-1', frontText: 'New', backText: 'New back' }]
 
     const result = mergeAgentResults(existing, generated, [], 'create')
 
     expect(result).toHaveLength(2)
-    expect(result[0].id).toBe('existing-1')
-    expect(result[1].id).toBe('new-1')
+    expect(result[0].id).toBe('new-1')
+    expect(result[1]).toBe(existing[0])
+    expect(result[1]).toMatchObject({ id: 'existing-1', frontText: 'Old', backText: 'Old back' })
   })
 
   it('applies back-side image updates correctly', () => {
