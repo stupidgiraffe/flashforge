@@ -1,8 +1,11 @@
+import type { CSSProperties } from 'react'
 import type { FlashCard, PrintSettings } from '@/lib/types'
 import { PlacedImage } from '@/components/PlacedImage'
 import { getCardSideImage } from '@/lib/image-placement'
 import { calculateFontSize } from '@/lib/print-utils'
 import { cn } from '@/lib/utils'
+import { CardThemeDecorations } from '@/components/CardThemeDecorations'
+import { isDesignerCardTheme } from '@/lib/card-themes'
 
 interface FlashCardDisplayProps {
   card: FlashCard | null
@@ -63,7 +66,7 @@ export function FlashCardDisplay({
     ? settings.fontSize
     : calculateFontSize(settings.fontSize, settings.cardsPerPage, textLength, !!imageUrl && hasText)
   const secondaryFontSize = fontSize * 0.72
-  const themeClasses = getThemeClasses(settings.theme)
+  const isDesignerTheme = isDesignerCardTheme(settings.theme)
   const borderClass = settings.showBorder ? 'border-2' : 'border-0'
   const roundedClass = settings.showRoundedCorners ? 'rounded-xl' : 'rounded-none'
 
@@ -80,20 +83,24 @@ export function FlashCardDisplay({
   return (
     <div
       className={cn(
-        'relative flex flex-col shadow-md overflow-hidden',
-        themeClasses,
+        'flash-card-surface relative flex flex-col shadow-md overflow-hidden',
         borderClass,
         roundedClass,
       )}
+      data-card-theme={settings.theme}
       style={{
+        '--card-main': settings.mainColor,
+        '--card-accent': settings.accentColor,
         width: printMode ? '100%' : `${cardWidth}px`,
         height: printMode ? '100%' : `${cardHeight}px`,
         borderColor: settings.mainColor,
         borderWidth: settings.showBorder ? `${settings.borderThickness}px` : 0,
         borderRadius: settings.showRoundedCorners ? `${settings.cornerRadius}px` : 0,
-      }}
+      } as CSSProperties}
     >
-        {!isBackgroundMode && (
+      <CardThemeDecorations theme={settings.theme} />
+
+        {!isBackgroundMode && !isDesignerTheme && (
           <div
             className="absolute top-0 left-0 right-0 h-1"
             style={{
@@ -128,7 +135,7 @@ export function FlashCardDisplay({
 
       {settings.showNumbering && cardNumber !== undefined && (
         <div
-          className="absolute top-3 left-3 text-xs font-semibold opacity-40 z-10"
+          className="flash-card-number absolute top-3 left-3 text-xs font-semibold opacity-40 z-[3]"
           style={{ color: isBackgroundMode && imageUrl ? '#ffffff' : settings.mainColor }}
         >
           #{cardNumber}
@@ -137,7 +144,7 @@ export function FlashCardDisplay({
 
       {showSetTitle && settings.showSetTitle && (
         <div
-          className="absolute top-3 right-3 text-xs font-semibold opacity-40 max-w-[60%] truncate z-10"
+          className="flash-card-set-title absolute top-3 right-3 text-xs font-semibold opacity-40 max-w-[60%] truncate z-[3]"
           style={{ color: isBackgroundMode && imageUrl ? '#ffffff' : settings.mainColor }}
         >
           {showSetTitle}
@@ -147,13 +154,13 @@ export function FlashCardDisplay({
       {isBackgroundMode ? (
         /* Background mode: text sits at the bottom over the gradient scrim */
         <div
-          className="relative flex-1 flex flex-col items-center justify-end p-6 gap-1 min-h-0"
+          className="flash-card-content relative flex-1 flex flex-col items-center justify-end p-6 gap-1 min-h-0"
           style={{ zIndex: 2 }}
         >
           {text && (
             <div
               className={cn(
-                'font-bold break-words hyphens-auto w-full text-balance',
+                'flash-card-primary font-bold break-words hyphens-auto w-full text-balance',
                 settings.textAlignment === 'left' && 'text-left',
                 settings.textAlignment === 'center' && 'text-center',
                 settings.textAlignment === 'right' && 'text-right',
@@ -173,7 +180,7 @@ export function FlashCardDisplay({
           {secondary && (
             <div
               className={cn(
-                'mt-3 break-words w-full text-pretty',
+                'flash-card-secondary mt-3 break-words w-full text-pretty',
                 settings.textAlignment === 'left' && 'text-left',
                 settings.textAlignment === 'center' && 'text-center',
                 settings.textAlignment === 'right' && 'text-right',
@@ -191,10 +198,10 @@ export function FlashCardDisplay({
           )}
         </div>
       ) : (
-        <div className="flex-1 flex flex-col items-center justify-center p-6 gap-1 min-h-0">
+        <div className="flash-card-content relative z-[2] flex-1 flex flex-col items-center justify-center p-6 gap-1 min-h-0">
           {imageUrl && (
             <div
-              className="relative mb-4 overflow-hidden rounded-lg bg-white/70"
+              className="flash-card-image-frame relative z-[2] mb-4 overflow-hidden rounded-lg bg-white/70"
               style={{
                 width: '100%',
                 height: `${imageHeight}px`,
@@ -214,7 +221,7 @@ export function FlashCardDisplay({
           {text && (
             <div
               className={cn(
-                'font-bold break-words hyphens-auto w-full text-balance',
+                'flash-card-primary font-bold break-words hyphens-auto w-full text-balance',
                 settings.textAlignment === 'left' && 'text-left',
                 settings.textAlignment === 'center' && 'text-center',
                 settings.textAlignment === 'right' && 'text-right',
@@ -233,7 +240,7 @@ export function FlashCardDisplay({
           {secondary && (
             <div
               className={cn(
-                'mt-3 break-words w-full text-pretty',
+                'flash-card-secondary mt-3 break-words w-full text-pretty',
                 settings.textAlignment === 'left' && 'text-left',
                 settings.textAlignment === 'center' && 'text-center',
                 settings.textAlignment === 'right' && 'text-right',
@@ -253,7 +260,7 @@ export function FlashCardDisplay({
 
       {settings.footerText && (
         <div
-          className="text-xs text-center py-2 border-t opacity-40"
+          className="flash-card-footer relative z-[3] text-xs text-center py-2 border-t opacity-40"
           style={{ borderColor: settings.mainColor, color: settings.mainColor }}
         >
           {settings.footerText}
@@ -261,19 +268,4 @@ export function FlashCardDisplay({
       )}
     </div>
   )
-}
-
-function getThemeClasses(theme: string): string {
-  const themes: Record<string, string> = {
-    minimal: 'bg-gradient-to-br from-white to-slate-50',
-    'classroom-cute': 'bg-gradient-to-br from-amber-50 to-orange-50',
-    'bold-vocabulary': 'bg-gradient-to-br from-blue-50 to-purple-50',
-    'picture-focus': 'bg-gradient-to-br from-gray-50 to-slate-100',
-    'ink-saver': 'bg-white',
-    'quiz-card': 'bg-gradient-to-br from-slate-50 to-slate-100',
-    'playful-pop': 'bg-gradient-to-br from-pink-50 via-white to-cyan-50',
-    'teacher-pro': 'bg-gradient-to-br from-white via-slate-50 to-blue-50',
-    'calm-study': 'bg-gradient-to-br from-emerald-50 to-teal-50',
-  }
-  return themes[theme] || 'bg-gradient-to-br from-white to-slate-50'
 }
