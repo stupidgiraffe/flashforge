@@ -127,6 +127,14 @@ export type CardTheme =
   | 'playful-pop'
   | 'teacher-pro'
   | 'calm-study'
+  | 'dreamy-classroom'
+  | 'storybook'
+  | 'notebook-doodle'
+  | 'retro-schoolhouse'
+  | 'botanical-study'
+  | 'candy-pop'
+  | 'space-explorer'
+  | 'modern-editorial'
 
 export interface PrintSettings {
   cardsPerPage: CardsPerPage
