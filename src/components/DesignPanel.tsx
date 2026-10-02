@@ -1,12 +1,15 @@
+import type { CSSProperties } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
-import type { PrintSettings, DuplexMode, CardType, CardsPerPage, Orientation, PaperSize } from '@/lib/types'
+import type { PrintSettings, CardTheme, DuplexMode, CardType, CardsPerPage, Orientation, PaperSize } from '@/lib/types'
 import { DESIGN_PRESETS, getActiveDesignPreset } from '@/lib/design-presets'
 import type { DesignPreset } from '@/lib/design-presets'
+import { CLASSIC_CARD_THEMES, DESIGNER_CARD_THEMES, getCardThemeDefinition, getThemeRecommendedUpdates } from '@/lib/card-themes'
+import { CardThemeDecorations } from '@/components/CardThemeDecorations'
 import { Palette, TextAlignCenter, TextAlignLeft, TextAlignRight, ArrowsCounterClockwise, Cards, Check } from '@phosphor-icons/react'
 import { toast } from 'sonner'
 
@@ -44,6 +47,37 @@ const PREVIEW_BACKGROUNDS: Record<string, string> = {
   'quiz-card': '#f8fafc',
   'bold-vocabulary': '#fef2f2',
   'ink-saver': '#ffffff',
+}
+
+function ThemePreview({ theme }: { theme: CardTheme }) {
+  const item = getCardThemeDefinition(theme)
+
+  return (
+    <div
+      aria-hidden="true"
+      className="theme-preview-card flash-card-surface relative flex aspect-[5/3] w-full items-center justify-center overflow-hidden"
+      data-card-theme={theme}
+      style={{
+        '--card-main': item.mainColor,
+        '--card-accent': item.accentColor,
+        color: item.mainColor,
+        border: `1px solid ${item.mainColor}33`,
+        borderRadius: '10px',
+      } as CSSProperties}
+    >
+      <CardThemeDecorations theme={theme} />
+      <div className="relative z-[2] flex w-[72%] flex-col items-center gap-1 text-center">
+        <div
+          className="max-w-full truncate text-[11px] font-extrabold tracking-wide"
+          style={{ color: item.mainColor }}
+        >
+          {item.previewLabel}
+        </div>
+        <div className="h-1.5 w-4/5 rounded-full opacity-70" style={{ backgroundColor: item.mainColor }} />
+        <div className="h-1 w-3/5 rounded-full opacity-70" style={{ backgroundColor: item.accentColor }} />
+      </div>
+    </div>
+  )
 }
 
 function StylePreview({ item }: { item: DesignPreset }) {
@@ -94,6 +128,12 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType, on
   function applyPreset(item: DesignPreset) {
     onUpdate(item.updates)
     toast.success(`${item.name} applied`)
+  }
+
+  function applyTheme(theme: CardTheme) {
+    const definition = getCardThemeDefinition(theme)
+    onUpdate(getThemeRecommendedUpdates(theme))
+    toast.success(`${definition.name} theme applied`)
   }
 
   return (
@@ -221,6 +261,76 @@ export function DesignPanel({ settings, cardType, onUpdate, onUpdateCardType, on
             </div>
             <p className="text-xs text-muted-foreground">Styles change card appearance only. Paper, card count, duplex alignment, and offsets stay unchanged.</p>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-2">
+        <CardHeader className="bg-muted/30">
+          <CardTitle className="flex items-center gap-2">
+            <Palette className="w-5 h-5" weight="duotone" />
+            Theme Gallery
+          </CardTitle>
+          <CardDescription>Choose the card's visual world. Designer themes add real framing, illustration, texture, and composition—not just a different gradient.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6 pt-6">
+          <div className="space-y-3">
+            <div>
+              <Label>Designer collection</Label>
+              <p className="mt-1 text-xs text-muted-foreground">Print-safe CSS and vector artwork. No external image packs or licensing dependencies.</p>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {DESIGNER_CARD_THEMES.map((theme) => (
+                <button
+                  key={theme.id}
+                  type="button"
+                  onClick={() => applyTheme(theme.id)}
+                  aria-pressed={settings.theme === theme.id}
+                  className={`relative rounded-lg border-2 p-2 text-left transition-all hover:-translate-y-0.5 hover:shadow-md ${
+                    settings.theme === theme.id ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'
+                  }`}
+                >
+                  <ThemePreview theme={theme.id} />
+                  <div className="mt-2 px-1 pb-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="text-sm font-semibold">{theme.name}</div>
+                      {settings.theme === theme.id && (
+                        <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground" title="Selected theme">
+                          <Check aria-hidden="true" weight="bold" />
+                          <span className="sr-only">Selected</span>
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{theme.description}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div>
+              <Label>Classic themes</Label>
+              <p className="mt-1 text-xs text-muted-foreground">Everything FlashForge already had remains available.</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+              {CLASSIC_CARD_THEMES.map((theme) => (
+                <button
+                  key={theme.id}
+                  type="button"
+                  onClick={() => applyTheme(theme.id)}
+                  aria-pressed={settings.theme === theme.id}
+                  className={`rounded-lg border-2 p-2 text-left transition-colors ${
+                    settings.theme === theme.id ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'
+                  }`}
+                >
+                  <ThemePreview theme={theme.id} />
+                  <div className="mt-2 truncate text-xs font-semibold">{theme.name}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <p className="text-xs text-muted-foreground">Choosing a theme applies its starting palette but does not change paper size, cards per page, duplex alignment, offsets, or your card content. You can customize colors and typography below.</p>
         </CardContent>
       </Card>
 
