@@ -109,6 +109,263 @@
   --radius-full: 9999px;
 }
 
+
+
+.flash-card-surface {
+    --card-main: #1e293b;
+    --card-accent: #0ea5e9;
+    --card-theme-gold: #c6a252;
+    --card-theme-soft: #fff7ed;
+    --card-theme-tape: #f0d79b;
+    --card-theme-pink: #f7a8c8;
+    --card-theme-cyan: #8fdde7;
+    --card-theme-yellow: #f7d56a;
+    --card-theme-planet: #a78bfa;
+    isolation: isolate;
+    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+  }
+
+  .flash-card-surface[data-card-theme='minimal'] {
+    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+  }
+
+  .flash-card-surface[data-card-theme='classroom-cute'] {
+    background: linear-gradient(135deg, #fffbeb 0%, #fff7ed 100%);
+  }
+
+  .flash-card-surface[data-card-theme='bold-vocabulary'] {
+    background: linear-gradient(135deg, #eff6ff 0%, #faf5ff 100%);
+  }
+
+  .flash-card-surface[data-card-theme='picture-focus'] {
+    background: linear-gradient(135deg, #f9fafb 0%, #f1f5f9 100%);
+  }
+
+  .flash-card-surface[data-card-theme='ink-saver'] {
+    background: #ffffff;
+  }
+
+  .flash-card-surface[data-card-theme='quiz-card'] {
+    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  }
+
+  .flash-card-surface[data-card-theme='playful-pop'] {
+    background:
+      radial-gradient(circle at 15% 15%, rgba(244, 114, 182, 0.12), transparent 28%),
+      radial-gradient(circle at 85% 82%, rgba(34, 211, 238, 0.12), transparent 30%),
+      #ffffff;
+  }
+
+  .flash-card-surface[data-card-theme='teacher-pro'] {
+    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 54%, #eff6ff 100%);
+  }
+
+  .flash-card-surface[data-card-theme='calm-study'] {
+    background: linear-gradient(135deg, #ecfdf5 0%, #f0fdfa 100%);
+  }
+
+  .flash-card-surface[data-card-theme='dreamy-classroom'] {
+    --card-theme-gold: #c6a252;
+    --card-theme-soft: #fff7ed;
+    background:
+      radial-gradient(circle at 20% 10%, rgba(199, 174, 230, 0.22), transparent 30%),
+      radial-gradient(circle at 83% 83%, rgba(244, 199, 221, 0.18), transparent 32%),
+      linear-gradient(145deg, #fffdf8 0%, #fffaf2 48%, #fbf7ff 100%);
+  }
+
+  .flash-card-surface[data-card-theme='storybook'] {
+    --card-theme-soft: #fff1e8;
+    background:
+      radial-gradient(circle at 15% 18%, rgba(240, 176, 153, 0.18), transparent 28%),
+      radial-gradient(circle at 87% 78%, rgba(172, 199, 159, 0.17), transparent 34%),
+      linear-gradient(145deg, #fffdf7 0%, #fff8f1 58%, #f7fbf2 100%);
+  }
+
+  .flash-card-surface[data-card-theme='notebook-doodle'] {
+    --card-theme-tape: #f2d28c;
+    background-color: #fffdf7;
+    background-image:
+      linear-gradient(90deg, transparent 0 12%, rgba(231, 111, 81, 0.16) 12% 12.4%, transparent 12.4% 100%),
+      repeating-linear-gradient(0deg, transparent 0 20px, rgba(81, 126, 164, 0.13) 20px 21px);
+  }
+
+  .flash-card-surface[data-card-theme='retro-schoolhouse'] {
+    background:
+      repeating-linear-gradient(0deg, rgba(108, 75, 48, 0.025) 0 1px, transparent 1px 4px),
+      linear-gradient(145deg, #fffaf0 0%, #f8efd9 100%);
+  }
+
+  .flash-card-surface[data-card-theme='botanical-study'] {
+    background:
+      radial-gradient(circle at 18% 82%, rgba(123, 155, 121, 0.13), transparent 32%),
+      radial-gradient(circle at 84% 12%, rgba(84, 116, 94, 0.12), transparent 30%),
+      linear-gradient(145deg, #fbfcf7 0%, #f3f7ef 100%);
+  }
+
+  .flash-card-surface[data-card-theme='candy-pop'] {
+    --card-theme-pink: #f7a8c8;
+    --card-theme-cyan: #8fdde7;
+    --card-theme-yellow: #f7d56a;
+    background:
+      radial-gradient(circle at 10% 12%, rgba(247, 168, 200, 0.28), transparent 24%),
+      radial-gradient(circle at 88% 20%, rgba(143, 221, 231, 0.24), transparent 25%),
+      radial-gradient(circle at 78% 88%, rgba(247, 213, 106, 0.22), transparent 28%),
+      linear-gradient(145deg, #fffaff 0%, #fffdf8 100%);
+  }
+
+  .flash-card-surface[data-card-theme='space-explorer'] {
+    --card-theme-planet: #a78bfa;
+    background:
+      radial-gradient(circle at 78% 18%, rgba(99, 102, 241, 0.44), transparent 26%),
+      radial-gradient(circle at 18% 84%, rgba(8, 145, 178, 0.24), transparent 32%),
+      linear-gradient(145deg, #111936 0%, #18214a 45%, #0f172a 100%);
+  }
+
+  .flash-card-surface[data-card-theme='modern-editorial'] {
+    background:
+      linear-gradient(118deg, rgba(232, 93, 63, 0.08) 0 18%, transparent 18% 100%),
+      linear-gradient(145deg, #ffffff 0%, #f7f7f5 100%);
+  }
+
+  .flash-card-surface[data-card-theme='dreamy-classroom'] .flash-card-content,
+  .flash-card-surface[data-card-theme='storybook'] .flash-card-content,
+  .flash-card-surface[data-card-theme='retro-schoolhouse'] .flash-card-content,
+  .flash-card-surface[data-card-theme='botanical-study'] .flash-card-content {
+    padding: 1.75rem;
+  }
+
+  .flash-card-surface[data-card-theme='notebook-doodle'] .flash-card-content {
+    padding-left: 2rem;
+  }
+
+  .flash-card-surface[data-card-theme='modern-editorial'] .flash-card-content {
+    padding-left: 2.25rem;
+    padding-right: 1.75rem;
+  }
+
+  .flash-card-surface[data-card-theme='dreamy-classroom'] .flash-card-primary,
+  .flash-card-surface[data-card-theme='storybook'] .flash-card-primary {
+    letter-spacing: 0.015em;
+  }
+
+  .flash-card-surface[data-card-theme='retro-schoolhouse'] .flash-card-primary {
+    letter-spacing: 0.025em;
+    text-transform: none;
+  }
+
+  .flash-card-surface[data-card-theme='modern-editorial'] .flash-card-primary {
+    letter-spacing: -0.025em;
+  }
+
+  .flash-card-surface[data-card-theme='space-explorer'] .flash-card-secondary {
+    color: var(--card-accent) !important;
+  }
+
+  .flash-card-surface[data-card-theme='dreamy-classroom'] .flash-card-image-frame {
+    border: 1px solid rgba(198, 162, 82, 0.7);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.72);
+    padding: 4px;
+  }
+
+  .flash-card-surface[data-card-theme='storybook'] .flash-card-image-frame {
+    border: 2px solid var(--card-accent);
+    border-radius: 18px 18px 12px 12px;
+    background: #fffdf7;
+    padding: 4px;
+  }
+
+  .flash-card-surface[data-card-theme='notebook-doodle'] .flash-card-image-frame {
+    border: 2px solid var(--card-main);
+    border-radius: 4px;
+    background: #ffffff;
+    padding: 5px;
+    transform: rotate(-0.7deg);
+  }
+
+  .flash-card-surface[data-card-theme='retro-schoolhouse'] .flash-card-image-frame {
+    border: 2px solid var(--card-main);
+    border-radius: 2px;
+    background: #fffaf0;
+    padding: 4px;
+  }
+
+  .flash-card-surface[data-card-theme='botanical-study'] .flash-card-image-frame {
+    border: 1px solid var(--card-accent);
+    border-radius: 14px;
+    background: #ffffff;
+    padding: 5px;
+  }
+
+  .flash-card-surface[data-card-theme='candy-pop'] .flash-card-image-frame {
+    border: 3px solid rgba(255, 255, 255, 0.86);
+    border-radius: 20px;
+    background: #ffffff;
+    padding: 4px;
+    box-shadow: 0 5px 0 rgba(91, 58, 122, 0.08);
+  }
+
+  .flash-card-surface[data-card-theme='space-explorer'] .flash-card-image-frame {
+    border: 1px solid var(--card-accent);
+    border-radius: 14px;
+    background: rgba(15, 23, 42, 0.78);
+    padding: 4px;
+  }
+
+  .flash-card-surface[data-card-theme='modern-editorial'] .flash-card-image-frame {
+    border: 0;
+    border-radius: 2px;
+    background: #ffffff;
+    padding: 0;
+  }
+
+  .flash-card-surface[data-card-theme='dreamy-classroom'] .flash-card-set-title,
+  .flash-card-surface[data-card-theme='storybook'] .flash-card-set-title,
+  .flash-card-surface[data-card-theme='retro-schoolhouse'] .flash-card-set-title {
+    opacity: 0.92;
+    border-radius: 999px;
+    background: var(--card-accent);
+    color: #ffffff !important;
+    padding: 0.18rem 0.5rem;
+  }
+
+  .flash-card-surface[data-card-theme='notebook-doodle'] .flash-card-set-title {
+    opacity: 0.86;
+    background: #fff4cf;
+    border: 1px solid var(--card-accent);
+    color: var(--card-main) !important;
+    padding: 0.15rem 0.45rem;
+    transform: rotate(1deg);
+  }
+
+  .flash-card-surface[data-card-theme='space-explorer'] .flash-card-set-title {
+    opacity: 0.9;
+    color: var(--card-main) !important;
+    border: 1px solid var(--card-accent);
+    border-radius: 999px;
+    padding: 0.16rem 0.45rem;
+    background: rgba(15, 23, 42, 0.55);
+  }
+
+  .flash-card-surface[data-card-theme='modern-editorial'] .flash-card-set-title {
+    opacity: 1;
+    color: var(--card-accent) !important;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .flash-card-surface[data-card-theme='dreamy-classroom'] .flash-card-footer,
+  .flash-card-surface[data-card-theme='storybook'] .flash-card-footer,
+  .flash-card-surface[data-card-theme='botanical-study'] .flash-card-footer {
+    margin-inline: 1.5rem;
+  }
+
+.theme-preview-card {
+  min-height: 7.5rem;
+}
+
+
 /*
  * Keep the print portal laid out off-screen instead of display:none.
  * PlacedImage measures its frame with ResizeObserver; display:none gives it
