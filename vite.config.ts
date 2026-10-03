@@ -15,9 +15,9 @@ export default defineConfig(async () => {
     apply: 'serve',
     configureServer(server) {
       const routes = new Map([
-        ['/api/flashcard-agent', './api/flashcard-agent.js'],
+        ['/api/flashcard-agent', './api/public-flashcard-agent.js'],
         ['/api/ai-models', './api/ai-models.js'],
-        ['/api/image-search', './api/image-search.js'],
+        ['/api/image-search', './api/public-image-search.js'],
         ['/api/image-agent', './api/image-agent.js'],
         ['/api/search-config', './api/search-config.js'],
       ])

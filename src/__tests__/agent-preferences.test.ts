@@ -69,8 +69,21 @@ describe('local acknowledgement and credential retention', () => {
     expect(hasAcceptedImageRisk(storage)).toBe(true)
   })
 
+  it('does not remember the AI key until the user explicitly opts in', () => {
+    const storage = memoryStorage()
+    expect(shouldRememberAiKey(storage)).toBe(false)
+    persistAiKey('secret', shouldRememberAiKey(storage), storage)
+    expect(storage.getItem('flashforge_byok_key')).toBeNull()
+
+    setRememberAiKey(true, storage)
+    expect(shouldRememberAiKey(storage)).toBe(true)
+    persistAiKey('secret', shouldRememberAiKey(storage), storage)
+    expect(storage.getItem('flashforge_byok_key')).toBe('secret')
+  })
+
   it('removes the AI key when remember-on-device is disabled', () => {
     const storage = memoryStorage()
+    setRememberAiKey(true, storage)
     persistAiKey('secret', true, storage)
     expect(storage.getItem('flashforge_byok_key')).toBe('secret')
     setRememberAiKey(false, storage)

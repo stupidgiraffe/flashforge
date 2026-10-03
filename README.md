@@ -2,7 +2,7 @@
 
 **Create, revise, and print classroom flashcards quickly.**
 
-FlashForge is a teacher-focused React application for building printable flashcard decks. The core editor stores decks locally in the browser and works without an account. Optional serverless endpoints power AI-assisted deck creation, image search, and provider integrations.
+FlashForge is a teacher-focused React application for building printable flashcard decks. The core editor stores decks locally in the browser and works without an account. Optional Vercel-compatible serverless endpoints power AI-assisted deck creation and image-provider integrations.
 
 ![React](https://img.shields.io/badge/React-19-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue)
@@ -42,6 +42,8 @@ The optional Flashcard Agent can create or revise deck content using an OpenAI-c
 - Revise existing cards without replacing the entire deck
 - Browse compatible models where supported
 
+FlashForge does not provide a shared anonymous AI key. In production, custom AI endpoints must use a public HTTPS host; private-network and localhost endpoints are rejected. Local development can still use localhost providers.
+
 ### Image search
 
 FlashForge supports a provider registry rather than relying on HTML scraping:
@@ -66,15 +68,17 @@ Only providers with configured credentials are included, except Openverse, which
 
 FlashForge uses a hybrid architecture:
 
-- The React editor, deck management, card design, and browser storage run client-side.
+- The React editor, deck management, card design, printing, and browser storage run client-side.
 - Vercel-compatible serverless functions under `api/` handle optional AI and image-provider requests.
-- Provider credentials can be configured server-side through environment variables or supplied by the user through BYOK settings.
+- AI generation is BYOK; the public app does not use a shared server-side AI credential.
+- Optional image-provider credentials can be configured server-side through environment variables or supplied by the user in the app.
+- Public AI and image-search routes use bounded JSON requests and validated inputs.
 - No account or hosted database is required for ordinary local use.
 
 ### Main directories
 
 ```text
-api/                     Optional serverless AI and image-search endpoints
+api/                     Serverless AI and image-search endpoints
 scripts/                 Manual smoke-test utilities
 src/components/          Application and UI components
 src/lib/                 Storage, printing, AI, image, and deck utilities
@@ -87,10 +91,12 @@ src/test/ and api tests/ Automated regression and endpoint tests
 FlashForge does not ship with shared AI or image-search credentials.
 
 - Decks and settings are stored in the browser unless the user explicitly exports or backs them up.
-- BYOK credentials are stored in browser `localStorage`.
-- A BYOK credential is sent only when a user invokes the corresponding provider-backed feature.
-- Server-configured credentials are read from environment variables and are not returned to the browser.
+- The AI API key is not persisted for a new user unless **Remember the AI key on this device** is explicitly enabled.
+- Image-provider BYOK settings are browser-local and can be cleared from the credential controls.
+- A BYOK credential is sent only when the user invokes the corresponding provider-backed feature.
+- Optional server-configured image-provider credentials are read from environment variables and are not returned to the browser.
 - `GET /api/search-config` exposes provider availability as booleans only; it does not expose credential values.
+- API error responses omit raw provider diagnostic bodies and include a request ID instead.
 - Google Drive support is manual backup and restore, not continuous cloud synchronization.
 
 Browser storage is convenient but is not a permanent backup. Clearing site data, changing domains, or using another browser profile can make locally stored decks unavailable.
@@ -111,7 +117,7 @@ npm run dev
 
 Open the local URL shown by Vite, normally `http://localhost:5173`.
 
-The development configuration includes local handling for the optional serverless API routes.
+The development configuration mirrors the hardened public AI and image-search routes used in production.
 
 ### Quality checks
 
@@ -138,14 +144,11 @@ PIXABAY_API_KEY=
 PEXELS_API_KEY=
 GOOGLE_API_KEY=
 GOOGLE_CX=
-
-# Optional server-side default AI provider
-# AI_API_KEY=
-# AI_BASE_URL=https://api.openai.com/v1
-# AI_MODEL=gpt-4o-mini
 ```
 
-All image providers are optional. Openverse works without credentials. Users may also supply provider credentials through the application instead of relying on server configuration.
+All server-side image providers are optional. Openverse works without credentials. Users may also supply provider credentials through the application.
+
+AI generation is intentionally BYOK; there is no shared `AI_API_KEY` environment variable consumed by the public app.
 
 Never commit a populated `.env` or `.env.local` file.
 
@@ -153,10 +156,10 @@ Never commit a populated `.env` or `.env.local` file.
 
 1. Fork or clone the repository.
 2. Import the repository into Vercel.
-3. Add any optional provider credentials under **Project Settings → Environment Variables**.
+3. Add any optional image-provider credentials under **Project Settings → Environment Variables**.
 4. Deploy.
 
-The repository includes Vercel configuration for its serverless endpoints. A static-only deployment can run the core editor, but AI and provider-backed image-search features require compatible API routes.
+The repository includes Vercel configuration for its serverless endpoints and browser security headers. A static-only deployment can run the core editor, but AI and provider-backed image-search features require compatible API routes.
 
 ## Using FlashForge
 
@@ -191,7 +194,7 @@ The Flashcard Agent uses two phases:
 
 Cards whose image lookup fails are still preserved without an image. Canceling a run keeps cards and images already completed.
 
-Images are embedded as compressed data URLs when possible so that printing does not depend on a temporary or hotlink-protected source URL. If embedding fails, FlashForge may retain the source URL instead.
+Images are embedded as compressed data URLs when possible so that printing does not depend on a temporary or hotlink-protected source URL. Server-side embedding validates the outbound destination and redirect chain and refuses private-network targets. If embedding fails, FlashForge may retain the source URL instead.
 
 ## Testing
 
@@ -215,13 +218,15 @@ AI_API_KEY=xxx AI_MODEL=gpt-4o-mini \
 npm run smoke
 ```
 
-Providers without credentials are skipped. Credential values are not printed. The live smoke test is not run in CI.
+The `AI_API_KEY` variables above belong to the local smoke-test process; they are not a shared production AI configuration. Providers without credentials are skipped. Credential values are not printed. The live smoke test is not run in CI.
 
 ## Current limitations
 
 - Data is primarily browser-local and is tied to the site origin and browser profile.
 - Google Drive provides backup and restore, not live multi-device collaboration.
 - Browser storage capacity varies; image-heavy decks can reach storage limits.
+- Image-provider BYOK keys remain browser-local until cleared; only AI-key persistence is opt-in by default today.
+- Distributed API rate limiting is not yet implemented; do not add shared paid AI credentials to an anonymous deployment.
 - Image search quality, rate limits, and availability depend on external providers.
 - Web image results are not automatically guaranteed to be licensed for every use.
 - Print alignment varies by browser and printer; test a single sheet first.
