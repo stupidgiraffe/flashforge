@@ -43,6 +43,36 @@ export default async function handler(req, res) {
         : { query },
     })
 
+    // Manual selection: only embed a URL returned by this fresh provider search.
+    // Never fetch an arbitrary client-supplied URL (server-side request forgery risk).
+    if (body.embedSelectedUrl) {
+      const selectedUrl = String(body.embedSelectedUrl)
+      const selected = results.find((result) => result.url === selectedUrl)
+      if (!selected) {
+        return json(res, 409, {
+          error: 'The selected image is no longer in the search results. Search again and reselect it.',
+          code: 'image_selection_expired',
+        })
+      }
+      try {
+        const dataUrl = await embedImage(selected.url)
+        return json(res, 200, { dataUrl, embedded: true, candidate: selected })
+      } catch (originalError) {
+        // Some providers block hotlinking the original but allow their thumbnail.
+        if (selected.thumbnailUrl && selected.thumbnailUrl !== selected.url) {
+          try {
+            const dataUrl = await embedImage(selected.thumbnailUrl)
+            return json(res, 200, { dataUrl, embedded: true, candidate: selected, thumbnailFallback: true })
+          } catch { /* Preserve the original failure below. */ }
+        }
+        return json(res, 422, {
+          error: 'This image cannot be downloaded. Choose another search result.',
+          code: 'image_download_failed',
+          details: originalError instanceof Error ? originalError.message : 'Image download failed',
+        })
+      }
+    }
+
     // Optional single-image embed (used by the agent Phase 2)
     if (body.embedImage && results.length > 0) {
       if (results[0].needsReview) {

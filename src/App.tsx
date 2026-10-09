@@ -908,6 +908,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
   const [imageSearchQuery, setImageSearchQuery] = useState('')
   const [imageSearchResults, setImageSearchResults] = useState<ImageCandidate[]>([])
   const [imageSearchLoading, setImageSearchLoading] = useState(false)
+  const [imageSearchApplyLoading, setImageSearchApplyLoading] = useState(false)
+  const [imageSearchResultsQuery, setImageSearchResultsQuery] = useState('')
+  const [imageSearchApplyError, setImageSearchApplyError] = useState<string | null>(null)
   const initialAgentDraft = loadAgentDraft(set.id)
   const [imageAgentOpen, setImageAgentOpen] = useState(false)
   const [flashcardAgentMode, setFlashcardAgentMode] = useState<FlashcardAgentMode>(initialAgentDraft.mode)
@@ -1741,7 +1744,9 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         backText: card.backText,
       })
       setImageSearchQuery(intent.query)
+      setImageSearchResultsQuery(intent.query)
       setImageSearchResults(getStoredImageCandidates(card, side))
+      setImageSearchApplyError(null)
     }
     setImageSearchCardId(cardId)
     setImageSearchSide(side)
@@ -1756,6 +1761,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
 
     try {
       setImageSearchLoading(true)
+      setImageSearchApplyError(null)
+      setImageSearchResults([])
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), 30_000)
       try {
@@ -1783,6 +1790,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         }
         const data = await response.json() as { results?: ImageCandidate[] }
         const results = data.results ?? []
+        setImageSearchResultsQuery(imageSearchQuery.trim())
         setImageSearchResults(results)
         if (results.length === 0) toast.message('No images found — try a different keyword or configure a provider in Image Search Settings')
       } catch (error) {
@@ -1798,30 +1806,65 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
     }
   }
 
-  function handleSelectWebImage(candidate: ImageCandidate) {
-    if (!imageSearchCardId) return
-    const asset = {
-      ...imageAssetFromCandidate(candidate),
-      candidates: imageSearchResults,
-    }
-    if (imageSearchSide === 'front') {
-      updateCard(imageSearchCardId, {
-        frontImageUrl: candidate.url,
-        frontImage: asset,
-        frontImageCandidates: undefined,
-        frontImagePlacement: DEFAULT_IMAGE_PLACEMENT,
+  async function handleSelectWebImage(candidate: ImageCandidate) {
+    if (!imageSearchCardId || imageSearchApplyLoading) return
+    setImageSearchApplyLoading(true)
+    setImageSearchApplyError(null)
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 45_000)
+    try {
+      const response = await fetch('/api/image-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          query: imageSearchResultsQuery,
+          intent: { query: imageSearchResultsQuery, concepts: [imageSearchResultsQuery], style: 'neutral' },
+          provider: candidate.provider,
+          braveApiKey: imageBraveKey.trim(),
+          pixabayApiKey: imagePixabayKey.trim(),
+          pexelsApiKey: imagePexelsKey.trim(),
+          googleApiKey: imageGoogleKey.trim() || googleImageApiKey.trim(),
+          googleCx: imageGoogleCx.trim() || googleImageSearchCx.trim(),
+          limit: 20,
+          embedSelectedUrl: candidate.url,
+        }),
       })
-    } else {
-      updateCard(imageSearchCardId, {
-        backImageUrl: candidate.url,
-        backImage: asset,
-        backImageCandidates: undefined,
-        backImagePlacement: DEFAULT_IMAGE_PLACEMENT,
-      })
+      const data = await response.json() as { dataUrl?: string; error?: string; thumbnailFallback?: boolean }
+      if (!response.ok || !data.dataUrl?.startsWith('data:image/')) {
+        throw new Error(data.error || 'The image could not be downloaded. Choose another result.')
+      }
+      // Decode/verify and compress before persisting. Remote URLs alone can be hotlink-blocked.
+      const imageUrl = await compressImage(data.dataUrl, 850, 0.72)
+      const asset = { ...imageAssetFromCandidate(candidate, imageUrl), candidates: imageSearchResults }
+      if (imageSearchSide === 'front') {
+        updateCard(imageSearchCardId, {
+          frontImageUrl: imageUrl,
+          frontImage: asset,
+          frontImageCandidates: undefined,
+          frontImagePlacement: DEFAULT_IMAGE_PLACEMENT,
+        })
+      } else {
+        updateCard(imageSearchCardId, {
+          backImageUrl: imageUrl,
+          backImage: asset,
+          backImageCandidates: undefined,
+          backImagePlacement: DEFAULT_IMAGE_PLACEMENT,
+        })
+      }
+      setImageSearchOpen(false)
+      setImageSearchResults([])
+      toast.success(data.thumbnailFallback ? 'Image inserted (thumbnail quality)' : 'Image inserted')
+    } catch (error) {
+      const message = controller.signal.aborted
+        ? 'Image download timed out. Choose another result.'
+        : error instanceof Error ? error.message : 'Could not insert this image.'
+      setImageSearchApplyError(message)
+      toast.error(message)
+    } finally {
+      clearTimeout(timeout)
+      setImageSearchApplyLoading(false)
     }
-    setImageSearchOpen(false)
-    setImageSearchResults([])
-    toast.success('Image inserted')
   }
 
 
@@ -3502,7 +3545,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
         </DialogContent>
       </Dialog>
 
-      <Dialog open={imageSearchOpen} onOpenChange={setImageSearchOpen}>
+      <Dialog open={imageSearchOpen} onOpenChange={(open) => { if (!imageSearchApplyLoading) setImageSearchOpen(open) }}>
         <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>Search Web Images</DialogTitle>
@@ -3521,7 +3564,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                   }
                 }}
               />
-              <Button onClick={runWebImageSearch} disabled={imageSearchLoading} className="sm:w-auto">
+              <Button onClick={runWebImageSearch} disabled={imageSearchLoading || imageSearchApplyLoading} className="sm:w-auto">
                 <MagnifyingGlass className="mr-2" weight="bold" />
                 Search
               </Button>
@@ -3531,6 +3574,8 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
               </Button>
             </div>
 
+            {imageSearchApplyError && <p role="alert" className="text-sm text-destructive">{imageSearchApplyError}</p>}
+            {imageSearchApplyLoading && <p role="status" className="text-sm text-muted-foreground">Downloading and saving image…</p>}
             {imageSearchResults.length > 0 ? (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-h-[420px] overflow-y-auto pr-1">
                 {imageSearchResults.map((result) => (
@@ -3538,6 +3583,7 @@ function SetEditor({ set, onBack, onUpdate, onDuplicate, googleImageApiKey, goog
                     key={result.id}
                     className="text-left border rounded-lg overflow-hidden hover:border-primary transition-colors"
                     onClick={() => handleSelectWebImage(result)}
+                    disabled={imageSearchApplyLoading || imageSearchLoading}
                     type="button"
                   >
                     <img
